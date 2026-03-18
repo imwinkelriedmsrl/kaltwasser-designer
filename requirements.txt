@@ -1,0 +1,10 @@
+streamlit>=1.32.0
+streamlit-agraph>=0.0.45
+networkx>=3.2
+plotly>=5.18
+pandas>=2.0
+numpy>=1.26
+scipy>=1.11
+openpyxl>=3.1
+fpdf2>=2.7
+python-dotenv>=1.0
