@@ -7,11 +7,17 @@ Supports:
   - Pressure drop calculation per segment (pipe + fittings)
   - Critical path analysis
   - Pump adequacy check (pump head from chiller node props)
-  - System water volume
+  - System water volume (pipes + equipment)
+  - Velocity warning flags per segment
 
 Each node has a 'type' attribute (CHILLER, FAN_COIL, T_JUNCTION, etc.)
 Each edge has attributes:
   flow_W, length_m, fittings, nominal_dn (after sizing)
+
+Minimum pipe size is DN20 (DN16 removed).
+Velocity limits are read from system_params:
+  v_max_main_ms   (default 1.5 m/s)
+  v_max_branch_ms (default 0.7 m/s)
 """
 
 import networkx as nx
@@ -23,9 +29,15 @@ from calculations.pipe_sizing import (
     calculate_segment_dp,
     calculate_pipe_water_content,
     get_pipe_data,
+    DEFAULT_V_MAX_MAIN_MS,
+    DEFAULT_V_MAX_BRANCH_MS,
 )
 from data.geberit_flowfit import get_fluid_properties
-from data.component_library import get_chiller, get_fan_coil, get_fan_coil_dp_kPa, CHILLERS, FAN_COILS
+from data.component_library import (
+    get_chiller, get_fan_coil, get_fan_coil_dp_kPa,
+    get_fan_coil_water_volume_L,
+    CHILLERS, FAN_COILS,
+)
 
 
 class NetworkCalculator:
@@ -48,6 +60,8 @@ class NetworkCalculator:
         self.edges = {e["id"]: e for e in edges}
         self.system_params = system_params
         self.glycol_pct = int(system_params.get("glycol_pct", 30))
+        self.v_max_main   = float(system_params.get("v_max_main_ms",   DEFAULT_V_MAX_MAIN_MS))
+        self.v_max_branch = float(system_params.get("v_max_branch_ms", DEFAULT_V_MAX_BRANCH_MS))
         self.graph = nx.DiGraph()
         self._build_graph()
 
@@ -128,9 +142,15 @@ class NetworkCalculator:
             flow_W = self._edge_flows.get(eid, 0.0)
             is_branch = self._is_branch_edge(eid)
             if flow_W > 0:
-                dn, _ = size_pipe(flow_W, glycol_pct=self.glycol_pct, is_branch=is_branch)
+                dn, _ = size_pipe(
+                    flow_W,
+                    glycol_pct=self.glycol_pct,
+                    is_branch=is_branch,
+                    v_max_main=self.v_max_main,
+                    v_max_branch=self.v_max_branch,
+                )
             else:
-                dn = 16
+                dn = 20  # minimum DN20
             pipe_sizes[eid] = dn
 
         self._pipe_sizes = pipe_sizes
@@ -155,20 +175,21 @@ class NetworkCalculator:
         dp_results: Dict[str, Dict] = {}
         for eid, edge in self.edges.items():
             flow_W   = self._edge_flows.get(eid, 0.0)
-            dn       = self._pipe_sizes.get(eid, 16)
+            dn       = self._pipe_sizes.get(eid, 20)
             length_m = edge.get("length_m", 1.0)
 
-            # Support both old flat structure and new props-nested structure
             fittings = edge.get("fittings", edge.get("props", {}).get("fittings_raw", {}))
-            if isinstance(fittings, dict):
-                pass
-            else:
+            if not isinstance(fittings, dict):
                 fittings = {}
+
+            is_branch = self._is_branch_edge(eid)
+            v_limit   = self.v_max_branch if is_branch else self.v_max_main
 
             if flow_W > 0:
                 dp_data = calculate_segment_dp(
                     flow_W, length_m, dn, self.glycol_pct, fittings
                 )
+                velocity_exceeded = dp_data["velocity_m_s"] > v_limit
             else:
                 dp_data = {
                     "dp_pipe_Pa":             0.0,
@@ -179,7 +200,10 @@ class NetworkCalculator:
                     "pressure_drop_mbar_m":   0.0,
                     "mass_flow_kg_h":         0.0,
                 }
+                velocity_exceeded = False
 
+            dp_data["velocity_exceeded"] = velocity_exceeded
+            dp_data["v_limit_ms"]        = v_limit
             dp_results[eid] = dp_data
 
         self._dp_results = dp_results
@@ -268,7 +292,6 @@ class NetworkCalculator:
             chiller_node = self.nodes[chiller_id]
             props = chiller_node.get("props", {})
 
-            # Prefer pump head from node props (user-entered or library-loaded)
             if "pump_head_kPa" in props:
                 pump_head_Pa = float(props["pump_head_kPa"]) * 1000.0
             elif "pump_head_kPa" in chiller_node:
@@ -339,25 +362,53 @@ class NetworkCalculator:
         }
 
     # ------------------------------------------------------------------
-    # System water volume
+    # System water volume (pipes + equipment)
     # ------------------------------------------------------------------
 
     def calculate_water_volume(self) -> Dict[str, Any]:
-        """Calculate total water content in the system."""
+        """
+        Calculate total water content in the system.
+        Includes: pipe volumes, fan coil water volumes, chiller evaporator volume,
+        and buffer tank volume if present.
+        """
         if not hasattr(self, "_pipe_sizes"):
             self.size_all_pipes()
 
-        total_volume_L = 0.0
+        # Pipe volumes
+        pipe_volume_L = 0.0
         volume_by_dn: Dict[int, float] = {}
+        volume_by_edge: Dict[str, float] = {}
 
         for eid, edge in self.edges.items():
-            dn = self._pipe_sizes.get(eid, 16)
+            dn = self._pipe_sizes.get(eid, 20)
             length_m = edge.get("length_m", 1.0)
             vol = calculate_pipe_water_content(dn, length_m)
-            total_volume_L += vol
+            pipe_volume_L += vol
             volume_by_dn[dn] = volume_by_dn.get(dn, 0.0) + vol
+            volume_by_edge[eid] = vol
 
+        # Fan coil water volumes
+        fc_volume_L = 0.0
+        fc_volumes: Dict[str, float] = {}
+        for nid, node in self.nodes.items():
+            if node.get("type") == "FAN_COIL":
+                props = node.get("props", {})
+                model = props.get("model", node.get("model", "Kampmann_KaCool_W_Size4"))
+                try:
+                    if model == "custom":
+                        vol = float(props.get("water_volume_L", props.get("water_content_L", 1.0)))
+                    else:
+                        vol = get_fan_coil_water_volume_L(model)
+                except Exception:
+                    vol = 1.0
+                fc_volume_L += vol
+                fc_volumes[nid] = vol
+
+        # Chiller evaporator water volume + buffer tank
+        chiller_evap_L = 0.0
+        buffer_tank_L = 0.0
         chiller_flow_m3h = 5.16
+
         for n in self.nodes.values():
             if n.get("type") == "CHILLER":
                 props = n.get("props", {})
@@ -365,21 +416,65 @@ class NetworkCalculator:
                 try:
                     if model == "custom":
                         chiller_flow_m3h = float(props.get("flow_rate_m3h", 5.16))
+                        chiller_evap_L   = float(props.get("water_volume_evaporator_L", 1.97))
+                        buffer_tank_L    = float(props.get("buffer_tank_L", 0.0)) if props.get("buffer_tank_integrated", False) else 0.0
                     else:
-                        chiller_data = get_chiller(model)
+                        chiller_data     = get_chiller(model)
                         chiller_flow_m3h = chiller_data["flow_rate_m3h"]
+                        chiller_evap_L   = float(chiller_data.get("water_volume_evaporator_L", 1.97))
+                        if chiller_data.get("buffer_tank_integrated", False):
+                            buffer_tank_L = float(chiller_data.get("buffer_tank_L", 0.0))
+                        # Override from node props if present
+                        if "water_volume_evaporator_L" in props:
+                            chiller_evap_L = float(props["water_volume_evaporator_L"])
+                        if props.get("buffer_tank_integrated", False):
+                            buffer_tank_L = float(props.get("buffer_tank_L", buffer_tank_L))
                 except Exception:
                     pass
                 break
 
+        total_volume_L = pipe_volume_L + fc_volume_L + chiller_evap_L + buffer_tank_L
         min_volume_L = chiller_flow_m3h * 1000.0 / 60.0 * 3.0
 
         return {
-            "total_volume_L":  total_volume_L,
-            "min_required_L":  min_volume_L,
-            "adequate":        total_volume_L >= min_volume_L,
-            "volume_by_dn":    volume_by_dn,
+            "total_volume_L":     total_volume_L,
+            "pipe_volume_L":      pipe_volume_L,
+            "fc_volume_L":        fc_volume_L,
+            "chiller_evap_L":     chiller_evap_L,
+            "buffer_tank_L":      buffer_tank_L,
+            "min_required_L":     min_volume_L,
+            "adequate":           total_volume_L >= min_volume_L,
+            "volume_by_dn":       volume_by_dn,
+            "volume_by_edge":     volume_by_edge,
+            "fc_volumes":         fc_volumes,
         }
+
+    # ------------------------------------------------------------------
+    # Velocity warnings
+    # ------------------------------------------------------------------
+
+    def get_velocity_warnings(self) -> List[Dict]:
+        """
+        Return list of segments where velocity exceeds limit.
+        """
+        if not hasattr(self, "_dp_results"):
+            self.calculate_pressure_drops()
+
+        warnings = []
+        for eid, dp_data in self._dp_results.items():
+            if dp_data.get("velocity_exceeded", False):
+                edge = self.edges[eid]
+                src_label = self.nodes.get(edge["source"], {}).get("label", edge["source"])
+                tgt_label = self.nodes.get(edge["target"], {}).get("label", edge["target"])
+                warnings.append({
+                    "edge_id":     eid,
+                    "from":        src_label,
+                    "to":          tgt_label,
+                    "velocity_ms": dp_data["velocity_m_s"],
+                    "v_limit_ms":  dp_data["v_limit_ms"],
+                    "nominal_dn":  self._pipe_sizes.get(eid, 20),
+                })
+        return warnings
 
     # ------------------------------------------------------------------
     # Full run
@@ -387,33 +482,39 @@ class NetworkCalculator:
 
     def run(self) -> Dict[str, Any]:
         """Execute the full hydraulic calculation and return all results."""
-        flows       = self.calculate_flows()
-        pipe_sizes  = self.size_all_pipes()
-        dp_results  = self.calculate_pressure_drops()
+        flows      = self.calculate_flows()
+        pipe_sizes = self.size_all_pipes()
+        dp_results = self.calculate_pressure_drops()
         crit_path, crit_dp = self.find_critical_path()
-        pump_check  = self.check_pump_adequacy()
-        load_check  = self.check_heat_load()
-        vol_check   = self.calculate_water_volume()
+        pump_check = self.check_pump_adequacy()
+        load_check = self.check_heat_load()
+        vol_check  = self.calculate_water_volume()
+        vel_warns  = self.get_velocity_warnings()
 
         segment_summary = []
         for eid, edge in self.edges.items():
             src_label = self.nodes.get(edge["source"], {}).get("label", edge["source"])
             tgt_label = self.nodes.get(edge["target"], {}).get("label", edge["target"])
+            is_branch = self._is_branch_edge(eid)
+            v_limit   = self.v_max_branch if is_branch else self.v_max_main
+            seg_vol   = vol_check["volume_by_edge"].get(eid, 0.0)
             segment_summary.append({
-                "edge_id":           eid,
-                "from":              src_label,
-                "to":                tgt_label,
-                "flow_W":            flows.get(eid, 0.0),
-                "flow_kW":           flows.get(eid, 0.0) / 1000.0,
-                "nominal_dn":        pipe_sizes.get(eid, 16),
-                "length_m":          edge.get("length_m", 0.0),
-                "velocity_m_s":      dp_results[eid]["velocity_m_s"],
-                "dp_pipe_Pa":        dp_results[eid]["dp_pipe_Pa"],
-                "dp_fittings_Pa":    dp_results[eid]["dp_fittings_Pa"],
-                "dp_total_Pa":       dp_results[eid]["dp_total_Pa"],
-                "dp_total_kPa":      dp_results[eid]["dp_total_kPa"],
-                "on_critical_path":  eid in crit_path,
-                "water_content_L":   vol_check["volume_by_dn"].get(pipe_sizes.get(eid, 16), 0.0),
+                "edge_id":              eid,
+                "from":                 src_label,
+                "to":                   tgt_label,
+                "flow_W":               flows.get(eid, 0.0),
+                "flow_kW":              flows.get(eid, 0.0) / 1000.0,
+                "nominal_dn":           pipe_sizes.get(eid, 20),
+                "length_m":             edge.get("length_m", 0.0),
+                "velocity_m_s":         dp_results[eid]["velocity_m_s"],
+                "v_limit_ms":           v_limit,
+                "velocity_exceeded":    dp_results[eid].get("velocity_exceeded", False),
+                "dp_pipe_Pa":           dp_results[eid]["dp_pipe_Pa"],
+                "dp_fittings_Pa":       dp_results[eid]["dp_fittings_Pa"],
+                "dp_total_Pa":          dp_results[eid]["dp_total_Pa"],
+                "dp_total_kPa":         dp_results[eid]["dp_total_kPa"],
+                "on_critical_path":     eid in crit_path,
+                "water_content_L":      seg_vol,
             })
 
         return {
@@ -426,4 +527,7 @@ class NetworkCalculator:
             "pump_check":            pump_check,
             "load_check":            load_check,
             "water_volume":          vol_check,
+            "velocity_warnings":     vel_warns,
+            "v_max_main_ms":         self.v_max_main,
+            "v_max_branch_ms":       self.v_max_branch,
         }

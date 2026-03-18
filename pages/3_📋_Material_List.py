@@ -1,6 +1,8 @@
 """
 Materialliste (BOM) — Seite 3
-Vollständige Stückliste mit Excel-Export.
+Vollständige Stückliste mit Geberit FlowFit Artikelnummern, Excel-Export.
+Enthält: T-Stücke mit Artikelnummern, kein DN16, Pufferspeicher/Ausdehnungsgefäss
+wenn nicht integriert.
 """
 
 import math
@@ -10,7 +12,12 @@ from collections import defaultdict
 from typing import Dict, List, Any
 
 from utils.helpers import init_session_state, export_bom_to_excel, size_expansion_vessel
-from data.geberit_flowfit import FLOWFIT_PIPE_SPECS, water_volume_per_meter
+from data.geberit_flowfit import (
+    FLOWFIT_PIPE_SPECS, water_volume_per_meter,
+    FLOWFIT_T_PIECES, FLOWFIT_T_PIECES_REDUCING,
+    FLOWFIT_COUPLINGS, FLOWFIT_ELBOWS_90, FLOWFIT_REDUCERS,
+    get_t_piece_article, get_elbow_article, get_coupling_article,
+)
 from data.component_library import CHILLERS, FAN_COILS, get_chiller, get_fan_coil
 
 # ---------------------------------------------------------------------------
@@ -32,7 +39,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown("# 📋 Materialliste (Stückliste / BOM)")
-st.markdown("Vollständige Stückliste für die Geberit FlowFit Kaltwasseranlage.")
+st.markdown("Vollständige Stückliste für die Geberit FlowFit Kaltwasseranlage inkl. Artikelnummern.")
 
 nodes   = st.session_state.nodes
 edges   = st.session_state.edges
@@ -78,6 +85,23 @@ def _get_fc_display_info(node: Dict):
     return article, description, cooling_str, airflow_str, conn_str
 
 
+def _fitting_article(fit_type: str, dn: int) -> str:
+    """Return article number for a fitting type and DN."""
+    if fit_type in ("t_through", "t_branch"):
+        info = FLOWFIT_T_PIECES.get(dn, {})
+        return info.get("article", "—")
+    elif fit_type == "elbow_90":
+        info = FLOWFIT_ELBOWS_90.get(dn, {})
+        return info.get("article", "—")
+    elif fit_type == "coupling":
+        info = FLOWFIT_COUPLINGS.get(dn, {})
+        return info.get("article", "—")
+    elif fit_type == "reducer":
+        # reducer needs both sizes — fall back generic
+        return "628.XXX.XX.1"
+    return "—"
+
+
 def build_bom(nodes, edges, sp, results) -> Dict[str, pd.DataFrame]:
     """Compile the full bill of materials."""
 
@@ -101,12 +125,19 @@ def build_bom(nodes, edges, sp, results) -> Dict[str, pd.DataFrame]:
                 "Kältemittel":   props.get("refrigerant", "—"),
                 "Anschluss":     props.get("connection_supply", "—"),
                 "Bezeichnung":   n.get("label", ""),
+                "Pufferspeicher": f"{props.get('buffer_tank_L','—')} L" if props.get("buffer_tank_integrated") else "extern",
+                "Ausdehnungsgef.": f"{props.get('expansion_vessel_L','—')} L" if props.get("expansion_vessel_integrated") else "extern",
                 "Menge":         1,
                 "Einheit":       "Stück",
             }
         else:
             try:
                 ch = get_chiller(model_key)
+                # Use node props overrides if present
+                buf_int = props.get("buffer_tank_integrated", ch.get("buffer_tank_integrated", False))
+                buf_L   = props.get("buffer_tank_L",   ch.get("buffer_tank_L",   0))
+                exp_int = props.get("expansion_vessel_integrated", ch.get("expansion_vessel_integrated", False))
+                exp_L   = props.get("expansion_vessel_L", ch.get("expansion_vessel_L", 0))
                 row = {
                     "Pos.":          len(chiller_rows) + 1,
                     "Artikelnummer": ch.get("article", "—"),
@@ -116,6 +147,8 @@ def build_bom(nodes, edges, sp, results) -> Dict[str, pd.DataFrame]:
                     "Kältemittel":   ch["refrigerant"],
                     "Anschluss":     ch.get("connection_supply", "—"),
                     "Bezeichnung":   n.get("label", ""),
+                    "Pufferspeicher": f"{buf_L} L (integriert)" if buf_int else "extern",
+                    "Ausdehnungsgef.": f"{exp_L} L (integriert)" if exp_int else "extern",
                     "Menge":         1,
                     "Einheit":       "Stück",
                 }
@@ -125,13 +158,15 @@ def build_bom(nodes, edges, sp, results) -> Dict[str, pd.DataFrame]:
                     "Artikelnummer": "—", "Beschreibung": model_key,
                     "Typ": "—", "Kälteleistung": "—", "Kältemittel": "—",
                     "Anschluss": "—", "Bezeichnung": n.get("label", ""),
+                    "Pufferspeicher": "—", "Ausdehnungsgef.": "—",
                     "Menge": 1, "Einheit": "Stück",
                 }
         chiller_rows.append(row)
 
     df_chillers = pd.DataFrame(chiller_rows) if chiller_rows else pd.DataFrame(
         columns=["Pos.", "Artikelnummer", "Beschreibung", "Typ",
-                 "Kälteleistung", "Kältemittel", "Anschluss", "Bezeichnung", "Menge", "Einheit"]
+                 "Kälteleistung", "Kältemittel", "Anschluss", "Bezeichnung",
+                 "Pufferspeicher", "Ausdehnungsgef.", "Menge", "Einheit"]
     )
 
     # ------------------------------------------------------------------
@@ -163,16 +198,18 @@ def build_bom(nodes, edges, sp, results) -> Dict[str, pd.DataFrame]:
     )
 
     # ------------------------------------------------------------------
-    # 3. Pipes
+    # 3. Pipes (minimum DN20)
     # ------------------------------------------------------------------
     pipe_lengths: Dict[int, float] = defaultdict(float)
 
     for edge in edges:
         eid      = edge["id"]
         length_m = edge.get("length_m", 0.0)
-        dn = 25
+        dn = 25  # default if not yet sized
         if results and "pipe_sizes" in results:
             dn = results["pipe_sizes"].get(eid, 25)
+        # Enforce minimum DN20
+        dn = max(dn, 20)
         pipe_lengths[dn] += length_m
 
     pipe_rows = []
@@ -180,10 +217,13 @@ def build_bom(nodes, edges, sp, results) -> Dict[str, pd.DataFrame]:
         raw_length        = pipe_lengths[dn]
         length_with_waste = raw_length * 1.10
         bars_5m           = math.ceil(length_with_waste / 5.0)
-        inner_mm          = FLOWFIT_PIPE_SPECS.get(dn, {}).get("di_mm", "?")
+        spec              = FLOWFIT_PIPE_SPECS.get(dn, {})
+        inner_mm          = spec.get("di_mm", "?")
+        article           = spec.get("article", "—")
         pipe_rows.append({
             "Pos.":                    len(pipe_rows) + 1,
-            "Beschreibung":            f"Geberit FlowFit Rohr Ø{dn} mm",
+            "Artikelnummer":           article,
+            "Beschreibung":            spec.get("desc", f"Geberit FlowFit Rohr Ø{dn} mm"),
             "Nenndurchmesser":         f"DN{dn}",
             "Innendurchmesser":        f"{inner_mm} mm",
             "Länge netto [m]":         round(raw_length, 2),
@@ -193,21 +233,21 @@ def build_bom(nodes, edges, sp, results) -> Dict[str, pd.DataFrame]:
         })
 
     df_pipes = pd.DataFrame(pipe_rows) if pipe_rows else pd.DataFrame(
-        columns=["Pos.", "Beschreibung", "Nenndurchmesser", "Innendurchmesser",
+        columns=["Pos.", "Artikelnummer", "Beschreibung", "Nenndurchmesser", "Innendurchmesser",
                  "Länge netto [m]", "Länge inkl. Verschnitt", "Anzahl Stangen (5m)", "Einheit"]
     )
 
     # ------------------------------------------------------------------
-    # 4. Fittings
+    # 4. Fittings with article numbers
     # ------------------------------------------------------------------
     fitting_counts: Dict[str, int] = defaultdict(int)
-    fitting_dn_map: Dict[str, str] = {}
 
     for edge in edges:
         eid = edge["id"]
         dn  = 25
         if results and "pipe_sizes" in results:
             dn = results["pipe_sizes"].get(eid, 25)
+        dn = max(dn, 20)
         fittings_src = edge.get("fittings", {})
         if not fittings_src:
             props = edge.get("props", {})
@@ -215,13 +255,12 @@ def build_bom(nodes, edges, sp, results) -> Dict[str, pd.DataFrame]:
         for fit_type, count in fittings_src.items():
             key = f"{fit_type}|DN{dn}"
             fitting_counts[key] += count
-            fitting_dn_map[key] = f"DN{dn}"
 
     fitting_name_map = {
         "elbow_90":        "90° Bogen",
         "t_through":       "T-Stück (Durchgang)",
         "t_branch":        "T-Stück (Abzweig)",
-        "coupling":        "Kupplung (gerade Muffe)",
+        "coupling":        "Kupplung (Verbinder)",
         "valve_isolation": "Absperrventil",
         "valve_balancing": "Regulierventil",
         "air_vent":        "Entlüftungsventil",
@@ -232,9 +271,12 @@ def build_bom(nodes, edges, sp, results) -> Dict[str, pd.DataFrame]:
     fitting_rows = []
     for key, count in sorted(fitting_counts.items()):
         fit_type, dn_str = key.split("|")
-        name = fitting_name_map.get(fit_type, fit_type)
+        dn_int = int(dn_str.replace("DN", ""))
+        name   = fitting_name_map.get(fit_type, fit_type)
+        art    = _fitting_article(fit_type, dn_int)
         fitting_rows.append({
             "Pos.":         len(fitting_rows) + 1,
+            "Artikelnummer": art,
             "Beschreibung": f"Geberit FlowFit {name} {dn_str}",
             "Typ":          name,
             "DN":           dn_str,
@@ -242,79 +284,139 @@ def build_bom(nodes, edges, sp, results) -> Dict[str, pd.DataFrame]:
             "Einheit":      "Stück",
         })
 
+    # Add stich pipe isolation valves for fan coils (minimum DN20)
     n_fc = sum(1 for n in nodes if n.get("type") == "FAN_COIL")
     if n_fc > 0:
+        art_iso_20 = FLOWFIT_COUPLINGS.get(20, {}).get("article", "—")
         fitting_rows.append({
             "Pos.":         len(fitting_rows) + 1,
-            "Beschreibung": 'Geberit FlowFit Absperrventil DN16 (½" Stichleitung GK)',
+            "Artikelnummer": "—",
+            "Beschreibung": 'Absperrventil DN20 (½" Stichleitung GK)',
             "Typ":          "Absperrventil",
-            "DN":           "DN16",
+            "DN":           "DN20",
             "Menge":        n_fc * 2,
             "Einheit":      "Stück",
         })
         fitting_rows.append({
             "Pos.":         len(fitting_rows) + 1,
-            "Beschreibung": "Regulierventil DN16 (Stichleitung GK)",
+            "Artikelnummer": "—",
+            "Beschreibung": "Regulierventil DN20 (Stichleitung GK)",
             "Typ":          "Regulierventil",
-            "DN":           "DN16",
+            "DN":           "DN20",
             "Menge":        n_fc,
             "Einheit":      "Stück",
         })
 
     df_fittings = pd.DataFrame(fitting_rows) if fitting_rows else pd.DataFrame(
-        columns=["Pos.", "Beschreibung", "Typ", "DN", "Menge", "Einheit"]
+        columns=["Pos.", "Artikelnummer", "Beschreibung", "Typ", "DN", "Menge", "Einheit"]
     )
 
     # ------------------------------------------------------------------
     # 5. Hydraulic accessories
+    #    Check if expansion vessel / safety valve / buffer tank are
+    #    already integrated in the chiller — if not, add them to BOM
     # ------------------------------------------------------------------
     access_rows = []
 
+    # Determine what is integrated in chillers
+    exp_vessel_integrated   = False
+    safety_valve_integrated = False
+    buffer_tank_integrated  = False
+    for n in nodes:
+        if n.get("type") == "CHILLER":
+            props = n.get("props", {})
+            model = props.get("model", "")
+            ch_data = {}
+            if model and model != "custom":
+                try:
+                    ch_data = get_chiller(model)
+                except Exception:
+                    pass
+            exp_vessel_integrated   = props.get("expansion_vessel_integrated",   ch_data.get("expansion_vessel_integrated",   False))
+            safety_valve_integrated = props.get("safety_valve_integrated",      ch_data.get("safety_valve_integrated",      False))
+            buffer_tank_integrated  = props.get("buffer_tank_integrated",       ch_data.get("buffer_tank_integrated",       False))
+            break
+
     n_vents = max(1, n_fc // 2 + 1)
     access_rows.append({
-        "Pos.": 1, "Beschreibung": "Automatischer Entlüfter DN15",
+        "Pos.": 1, "Artikelnummer": "—",
+        "Beschreibung": "Automatischer Entlüfter DN15",
         "Menge": n_vents, "Einheit": "Stück",
         "Bemerkung": "1 pro Kreisläufe / Hochpunkt",
     })
     access_rows.append({
-        "Pos.": 2, "Beschreibung": "Befüll- und Entleerungshahn DN20",
+        "Pos.": 2, "Artikelnummer": "—",
+        "Beschreibung": "Befüll- und Entleerungshahn DN20",
         "Menge": 2, "Einheit": "Stück",
         "Bemerkung": "VL + RL, tiefster Punkt",
     })
     access_rows.append({
-        "Pos.": 3, "Beschreibung": "Manometeranschluss PN16, DN15",
+        "Pos.": 3, "Artikelnummer": "—",
+        "Beschreibung": "Manometeranschluss PN16, DN15",
         "Menge": 2, "Einheit": "Stück",
         "Bemerkung": "Vorlauf + Rücklauf",
     })
 
     total_vol_L = sum(
         water_volume_per_meter(
-            results["pipe_sizes"].get(e["id"], 25) if results else 25
+            max(results["pipe_sizes"].get(e["id"], 25), 20) if results else 25
         ) * e.get("length_m", 1.0)
         for e in edges
     )
-    exp = size_expansion_vessel(
-        total_volume_L=max(total_vol_L, 20.0),
-        t_supply_C=float(sp.get("t_supply_C", 7.0)),
-        glycol_pct=int(sp.get("glycol_pct", 30)),
-    )
-    exp_size = exp["vn_L"]
-    std_sizes = [8, 12, 18, 24, 35, 50, 80, 100, 150, 200]
-    exp_std   = next((s for s in std_sizes if s >= exp_size), std_sizes[-1])
-    access_rows.append({
-        "Pos.": 4, "Beschreibung": f"Membran-Druckausdehnungsgefäss {exp_std} L",
-        "Menge": 1, "Einheit": "Stück",
-        "Bemerkung": f"Berechnetes Min. {exp_size:.1f} L, Vorladedruck {exp['p0_bar']:.2f} bar",
-    })
-    access_rows.append({
-        "Pos.": 5, "Beschreibung": "Sicherheitsventil 3 bar, DN15",
-        "Menge": 1, "Einheit": "Stück",
-        "Bemerkung": "Absicherung Ausdehnungsgefäss",
-    })
+
+    # Expansion vessel — only if NOT integrated in chiller
+    if not exp_vessel_integrated:
+        exp = size_expansion_vessel(
+            total_volume_L=max(total_vol_L, 20.0),
+            t_supply_C=float(sp.get("t_supply_C", 7.0)),
+            glycol_pct=int(sp.get("glycol_pct", 30)),
+        )
+        exp_size = exp["vn_L"]
+        std_sizes = [8, 12, 18, 24, 35, 50, 80, 100, 150, 200]
+        exp_std   = next((s for s in std_sizes if s >= exp_size), std_sizes[-1])
+        access_rows.append({
+            "Pos.": 4, "Artikelnummer": "—",
+            "Beschreibung": f"Membran-Druckausdehnungsgefäss {exp_std} L",
+            "Menge": 1, "Einheit": "Stück",
+            "Bemerkung": f"Berechnetes Min. {exp_size:.1f} L, Vorladedruck {exp['p0_bar']:.2f} bar",
+        })
+    else:
+        access_rows.append({
+            "Pos.": 4, "Artikelnummer": "—",
+            "Beschreibung": "Ausdehnungsgefäss — integriert in Kältemaschine",
+            "Menge": 0, "Einheit": "Stück",
+            "Bemerkung": "In Kältemaschine integriert",
+        })
+
+    # Safety valve — only if NOT integrated
+    if not safety_valve_integrated:
+        access_rows.append({
+            "Pos.": 5, "Artikelnummer": "—",
+            "Beschreibung": "Sicherheitsventil 3 bar, DN15",
+            "Menge": 1, "Einheit": "Stück",
+            "Bemerkung": "Absicherung Ausdehnungsgefäss",
+        })
+    else:
+        access_rows.append({
+            "Pos.": 5, "Artikelnummer": "—",
+            "Beschreibung": "Sicherheitsventil — integriert in Kältemaschine",
+            "Menge": 0, "Einheit": "Stück",
+            "Bemerkung": "In Kältemaschine integriert",
+        })
+
+    # Buffer tank — only if NOT integrated
+    if not buffer_tank_integrated:
+        access_rows.append({
+            "Pos.": 6, "Artikelnummer": "—",
+            "Beschreibung": "Pufferspeicher (extern)",
+            "Menge": 1, "Einheit": "Stück",
+            "Bemerkung": "Externes Pufferspeicher — Grösse projektspezifisch festlegen",
+        })
 
     glycol_needed_L = max(total_vol_L * float(sp.get("glycol_pct", 30)) / 100.0, 5.0)
     access_rows.append({
-        "Pos.": 6, "Beschreibung": "Ethylenglykol 40% Fertigmischung, Kanister",
+        "Pos.": len(access_rows) + 1, "Artikelnummer": "—",
+        "Beschreibung": "Ethylenglykol 40% Fertigmischung, Kanister",
         "Menge": math.ceil(glycol_needed_L / 20.0),
         "Einheit": "Kanister (20 L)",
         "Bemerkung": f"Bedarf ca. {glycol_needed_L:.0f} L für {sp.get('glycol_pct',30)}% Konzentration",
@@ -325,7 +427,7 @@ def build_bom(nodes, edges, sp, results) -> Dict[str, pd.DataFrame]:
     # ------------------------------------------------------------------
     # 6. Thermal insulation
     # ------------------------------------------------------------------
-    insulation_thickness = {16: 13, 20: 13, 25: 19, 32: 19, 40: 25, 50: 25, 63: 32, 75: 32}
+    insulation_thickness = {20: 13, 25: 19, 32: 19, 40: 25, 50: 25, 63: 32, 75: 32}
     insulation_rows = []
     for dn in sorted(pipe_lengths.keys()):
         raw_length = pipe_lengths[dn]
@@ -383,7 +485,7 @@ for section_title, key in sections:
 if not results:
     st.warning(
         "Hydraulikberechnung noch nicht ausgeführt. "
-        "Rohrdimensionierung basiert auf Schätzwerten (DN25). "
+        "Rohrdimensionierung basiert auf Schätzwerten (DN25, min DN20). "
         "Bitte Hydraulikberechnung ausführen für exakte Rohrdurchmesser."
     )
 

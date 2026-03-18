@@ -8,7 +8,8 @@ Source: Geberit FlowFit Druckverlust-Tabellen
 Data columns per pipe size:
   (Q_W, mass_flow_kg_h, velocity_m_s, pressure_drop_mbar_per_m)
 
-Pipe sizes available: Ø16, Ø20, Ø25, Ø32, Ø40, Ø50, Ø63, Ø75
+Pipe sizes available: Ø20, Ø25, Ø32, Ø40, Ø50, Ø63, Ø75
+Note: DN16 has been removed. Smallest size is DN20.
 """
 
 import numpy as np
@@ -35,31 +36,6 @@ _DATA_30PCT_7_12 = {
         "glycol_pct":     30,
     },
     "pipes": {
-        # DN16  di=12.0 mm
-        16: {
-            "di_mm": 12.0,
-            "data": [
-                # (Q_W,   kg/h,   v m/s,  R mbar/m)
-                (  200,   0.197,  0.051,  0.012),
-                (  300,   0.295,  0.076,  0.025),
-                (  400,   0.394,  0.101,  0.042),
-                (  500,   0.492,  0.127,  0.063),
-                (  600,   0.591,  0.152,  0.088),
-                (  700,   0.689,  0.178,  0.118),
-                (  800,   0.788,  0.203,  0.151),
-                (  900,   0.886,  0.228,  0.188),
-                ( 1000,   0.985,  0.254,  0.229),
-                ( 1200,   1.182,  0.305,  0.322),
-                ( 1400,   1.379,  0.355,  0.430),
-                ( 1600,   1.576,  0.406,  0.552),
-                ( 1800,   1.773,  0.457,  0.688),
-                ( 2000,   1.970,  0.508,  0.838),
-                ( 2500,   2.463,  0.635,  1.264),
-                ( 3000,   2.955,  0.762,  1.779),
-                ( 3500,   3.448,  0.889,  2.381),
-                ( 4000,   3.940,  1.016,  3.068),
-            ],
-        },
         # DN20  di=16.0 mm
         20: {
             "di_mm": 16.0,
@@ -238,22 +214,6 @@ _DATA_40PCT_7_12 = {
         "glycol_pct":     40,
     },
     "pipes": {
-        16: {
-            "di_mm": 12.0,
-            "data": [
-                (  200,   0.207,  0.051,  0.015),
-                (  300,   0.311,  0.076,  0.031),
-                (  500,   0.518,  0.127,  0.079),
-                (  700,   0.725,  0.178,  0.148),
-                ( 1000,   1.036,  0.254,  0.288),
-                ( 1500,   1.554,  0.381,  0.593),
-                ( 2000,   2.072,  0.508,  1.015),
-                ( 2500,   2.590,  0.635,  1.543),
-                ( 3000,   3.108,  0.762,  2.177),
-                ( 3500,   3.626,  0.889,  2.913),
-                ( 4000,   4.144,  1.016,  3.752),
-            ],
-        },
         20: {
             "di_mm": 16.0,
             "data": [
@@ -398,19 +358,90 @@ FITTING_ZETA = {
     "check_valve":      2.0,   # Rückschlagventil
 }
 
-# FlowFit pipe outer diameters and wall thicknesses (mm)
-FLOWFIT_PIPE_SPECS: Dict[int, Dict[str, float]] = {
-    16: {"da_mm": 16.0, "di_mm": 12.0, "s_mm": 2.0},
-    20: {"da_mm": 20.0, "di_mm": 16.0, "s_mm": 2.0},
-    25: {"da_mm": 25.0, "di_mm": 20.0, "s_mm": 2.5},
-    32: {"da_mm": 32.0, "di_mm": 26.4, "s_mm": 2.8},
-    40: {"da_mm": 40.0, "di_mm": 34.0, "s_mm": 3.0},
-    50: {"da_mm": 50.0, "di_mm": 42.4, "s_mm": 3.8},
-    63: {"da_mm": 63.0, "di_mm": 55.0, "s_mm": 4.0},
-    75: {"da_mm": 75.0, "di_mm": 65.8, "s_mm": 4.6},
+# FlowFit pipe outer diameters, wall thicknesses, and article numbers (mm)
+# DN16 removed — smallest size is DN20
+FLOWFIT_PIPE_SPECS: Dict[int, Dict[str, Any]] = {
+    20: {"da_mm": 20.0, "di_mm": 16.0, "s_mm": 2.0, "article": "619.020.00.1", "desc": "FlowFit Rohr 20mm"},
+    25: {"da_mm": 25.0, "di_mm": 20.0, "s_mm": 2.5, "article": "619.025.00.1", "desc": "FlowFit Rohr 25mm"},
+    32: {"da_mm": 32.0, "di_mm": 26.4, "s_mm": 2.8, "article": "619.032.00.1", "desc": "FlowFit Rohr 32mm"},
+    40: {"da_mm": 40.0, "di_mm": 34.0, "s_mm": 3.0, "article": "619.040.00.1", "desc": "FlowFit Rohr 40mm"},
+    50: {"da_mm": 50.0, "di_mm": 42.4, "s_mm": 3.8, "article": "619.050.00.1", "desc": "FlowFit Rohr 50mm"},
+    63: {"da_mm": 63.0, "di_mm": 55.0, "s_mm": 4.0, "article": "619.063.00.1", "desc": "FlowFit Rohr 63mm"},
+    75: {"da_mm": 75.0, "di_mm": 65.8, "s_mm": 4.6, "article": "619.075.00.1", "desc": "FlowFit Rohr 75mm"},
 }
 
-AVAILABLE_SIZES = sorted(FLOWFIT_PIPE_SPECS.keys())  # [16, 20, 25, 32, 40, 50, 63, 75]
+AVAILABLE_SIZES = [20, 25, 32, 40, 50, 63, 75]  # DN16 removed
+
+# ---------------------------------------------------------------------------
+# T-pieces (Formteile/T-Stücke) with article numbers
+# ---------------------------------------------------------------------------
+
+# Equal T-pieces (gleiches T-Stück)
+FLOWFIT_T_PIECES = {
+    20:  {"article": "620.020.00.1", "desc": "FlowFit T-Stück 20mm gleich"},
+    25:  {"article": "620.025.00.1", "desc": "FlowFit T-Stück 25mm gleich"},
+    32:  {"article": "620.032.00.1", "desc": "FlowFit T-Stück 32mm gleich"},
+    40:  {"article": "620.040.00.1", "desc": "FlowFit T-Stück 40mm gleich"},
+    50:  {"article": "620.050.00.1", "desc": "FlowFit T-Stück 50mm gleich"},
+    63:  {"article": "620.063.00.1", "desc": "FlowFit T-Stück 63mm gleich"},
+    75:  {"article": "620.075.00.1", "desc": "FlowFit T-Stück 75mm gleich"},
+}
+
+# Reducing T-pieces (Übergangs-T-Stück) - main_dn x branch_dn
+FLOWFIT_T_PIECES_REDUCING = {
+    (25, 20): {"article": "620.025.20.1", "desc": "FlowFit Übergangs-T-Stück 25x20mm"},
+    (32, 20): {"article": "620.032.20.1", "desc": "FlowFit Übergangs-T-Stück 32x20mm"},
+    (32, 25): {"article": "620.032.25.1", "desc": "FlowFit Übergangs-T-Stück 32x25mm"},
+    (40, 20): {"article": "620.040.20.1", "desc": "FlowFit Übergangs-T-Stück 40x20mm"},
+    (40, 25): {"article": "620.040.25.1", "desc": "FlowFit Übergangs-T-Stück 40x25mm"},
+    (40, 32): {"article": "620.040.32.1", "desc": "FlowFit Übergangs-T-Stück 40x32mm"},
+    (50, 25): {"article": "620.050.25.1", "desc": "FlowFit Übergangs-T-Stück 50x25mm"},
+    (50, 32): {"article": "620.050.32.1", "desc": "FlowFit Übergangs-T-Stück 50x32mm"},
+    (50, 40): {"article": "620.050.40.1", "desc": "FlowFit Übergangs-T-Stück 50x40mm"},
+    (63, 32): {"article": "620.063.32.1", "desc": "FlowFit Übergangs-T-Stück 63x32mm"},
+    (63, 40): {"article": "620.063.40.1", "desc": "FlowFit Übergangs-T-Stück 63x40mm"},
+    (63, 50): {"article": "620.063.50.1", "desc": "FlowFit Übergangs-T-Stück 63x50mm"},
+    (75, 40): {"article": "620.075.40.1", "desc": "FlowFit Übergangs-T-Stück 75x40mm"},
+    (75, 50): {"article": "620.075.50.1", "desc": "FlowFit Übergangs-T-Stück 75x50mm"},
+    (75, 63): {"article": "620.075.63.1", "desc": "FlowFit Übergangs-T-Stück 75x63mm"},
+}
+
+# Couplings (Muffen/Verbinder)
+FLOWFIT_COUPLINGS = {
+    20: {"article": "627.020.00.1", "desc": "FlowFit Verbinder 20mm"},
+    25: {"article": "627.025.00.1", "desc": "FlowFit Verbinder 25mm"},
+    32: {"article": "627.032.00.1", "desc": "FlowFit Verbinder 32mm"},
+    40: {"article": "627.040.00.1", "desc": "FlowFit Verbinder 40mm"},
+    50: {"article": "627.050.00.1", "desc": "FlowFit Verbinder 50mm"},
+    63: {"article": "627.063.00.1", "desc": "FlowFit Verbinder 63mm"},
+    75: {"article": "627.075.00.1", "desc": "FlowFit Verbinder 75mm"},
+}
+
+# Elbows 90° (Winkel 90°)
+FLOWFIT_ELBOWS_90 = {
+    20: {"article": "625.020.00.1", "desc": "FlowFit Winkel 90° 20mm"},
+    25: {"article": "625.025.00.1", "desc": "FlowFit Winkel 90° 25mm"},
+    32: {"article": "625.032.00.1", "desc": "FlowFit Winkel 90° 32mm"},
+    40: {"article": "625.040.00.1", "desc": "FlowFit Winkel 90° 40mm"},
+    50: {"article": "625.050.00.1", "desc": "FlowFit Winkel 90° 50mm"},
+    63: {"article": "625.063.00.1", "desc": "FlowFit Winkel 90° 63mm"},
+    75: {"article": "625.075.00.1", "desc": "FlowFit Winkel 90° 75mm"},
+}
+
+# Reducers (Reduktionsstücke)
+FLOWFIT_REDUCERS = {
+    (25, 20): {"article": "628.025.20.1", "desc": "FlowFit Reduktion 25x20mm"},
+    (32, 25): {"article": "628.032.25.1", "desc": "FlowFit Reduktion 32x25mm"},
+    (32, 20): {"article": "628.032.20.1", "desc": "FlowFit Reduktion 32x20mm"},
+    (40, 32): {"article": "628.040.32.1", "desc": "FlowFit Reduktion 40x32mm"},
+    (40, 25): {"article": "628.040.25.1", "desc": "FlowFit Reduktion 40x25mm"},
+    (50, 40): {"article": "628.050.40.1", "desc": "FlowFit Reduktion 50x40mm"},
+    (50, 32): {"article": "628.050.32.1", "desc": "FlowFit Reduktion 50x32mm"},
+    (63, 50): {"article": "628.063.50.1", "desc": "FlowFit Reduktion 63x50mm"},
+    (63, 40): {"article": "628.063.40.1", "desc": "FlowFit Reduktion 63x40mm"},
+    (75, 63): {"article": "628.075.63.1", "desc": "FlowFit Reduktion 75x63mm"},
+    (75, 50): {"article": "628.075.50.1", "desc": "FlowFit Reduktion 75x50mm"},
+}
 
 
 # ---------------------------------------------------------------------------
@@ -442,7 +473,7 @@ def get_pipe_data(nominal_dn: int, glycol_pct: int, flow_W: float) -> Dict[str, 
     Parameters
     ----------
     nominal_dn : int
-        Nominal pipe diameter (e.g. 16, 20, 25 …)
+        Nominal pipe diameter (e.g. 20, 25 …)
     glycol_pct : int
         Glycol concentration in % (use 30 or 40)
     flow_W : float
@@ -461,8 +492,8 @@ def get_pipe_data(nominal_dn: int, glycol_pct: int, flow_W: float) -> Dict[str, 
     pipe = dataset["pipes"][nominal_dn]
     data = pipe["data"]
 
-    interp_v   = _build_interpolator(data, x_col=0, y_col=2)
-    interp_R   = _build_interpolator(data, x_col=0, y_col=3)
+    interp_v    = _build_interpolator(data, x_col=0, y_col=2)
+    interp_R    = _build_interpolator(data, x_col=0, y_col=3)
     interp_mdot = _build_interpolator(data, x_col=0, y_col=1)
 
     return {
@@ -480,6 +511,7 @@ def size_pipe(
 ) -> Tuple[int, Dict[str, float]]:
     """
     Select smallest FlowFit pipe that satisfies velocity and pressure-drop limits.
+    Minimum size is DN20 (DN16 removed).
 
     Parameters
     ----------
@@ -496,7 +528,6 @@ def size_pipe(
     -------
     (nominal_dn, pipe_data_dict)
     """
-    dataset = _get_dataset(glycol_pct)
     for dn in AVAILABLE_SIZES:
         data = get_pipe_data(dn, glycol_pct, flow_W)
         if data["velocity_m_s"] <= max_velocity_m_s and data["pressure_drop_mbar_m"] <= max_dp_mbar_m:
@@ -516,3 +547,31 @@ def water_volume_per_meter(nominal_dn: int) -> float:
     di = FLOWFIT_PIPE_SPECS[nominal_dn]["di_mm"] / 1000.0  # m
     area = np.pi * di**2 / 4.0  # m²
     return area * 1000.0  # litres/m
+
+
+def get_t_piece_article(main_dn: int, branch_dn: int) -> Dict[str, str]:
+    """Return T-piece article info for given main and branch diameters."""
+    if main_dn == branch_dn:
+        return FLOWFIT_T_PIECES.get(main_dn, {"article": "—", "desc": f"FlowFit T-Stück {main_dn}mm"})
+    return FLOWFIT_T_PIECES_REDUCING.get(
+        (main_dn, branch_dn),
+        {"article": "—", "desc": f"FlowFit Übergangs-T-Stück {main_dn}x{branch_dn}mm"}
+    )
+
+
+def get_elbow_article(dn: int) -> Dict[str, str]:
+    """Return elbow 90° article info for given diameter."""
+    return FLOWFIT_ELBOWS_90.get(dn, {"article": "—", "desc": f"FlowFit Winkel 90° {dn}mm"})
+
+
+def get_coupling_article(dn: int) -> Dict[str, str]:
+    """Return coupling article info for given diameter."""
+    return FLOWFIT_COUPLINGS.get(dn, {"article": "—", "desc": f"FlowFit Verbinder {dn}mm"})
+
+
+def get_reducer_article(large_dn: int, small_dn: int) -> Dict[str, str]:
+    """Return reducer article info for given diameters."""
+    return FLOWFIT_REDUCERS.get(
+        (large_dn, small_dn),
+        {"article": "—", "desc": f"FlowFit Reduktion {large_dn}x{small_dn}mm"}
+    )

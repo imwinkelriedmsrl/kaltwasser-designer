@@ -1,10 +1,12 @@
 """
 Hydraulikberechnung — Seite 2
-Durchflüsse, Druckverluste, Rohrdimensionierung, Kritischer Pfad.
+Durchflüsse, Druckverluste, Rohrdimensionierung, Kritischer Pfad,
+Geschwindigkeitswarnungen, Systemwasserinhalt (Wasser/Glykol-Aufteilung).
 """
 
 import streamlit as st
 import plotly.graph_objects as go
+import plotly.express as px
 import pandas as pd
 
 from utils.helpers import init_session_state, check_frosting
@@ -27,6 +29,10 @@ st.markdown("""
 }
 .ok-badge  { color: #155724; background: #d4edda; padding: 3px 8px; border-radius: 4px; font-weight: 600; }
 .err-badge { color: #721c24; background: #f8d7da; padding: 3px 8px; border-radius: 4px; font-weight: 600; }
+.warn-box  {
+    background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px;
+    padding: 10px 14px; margin: 6px 0; color: #856404;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -34,7 +40,7 @@ st.markdown("# 📊 Hydraulikberechnung")
 st.markdown("Automatische Rohrdimensionierung, Druckverlustberechnung und Pumpeneignungsprüfung.")
 
 DN_COLORS = {
-    16: "#e3f2fd", 20: "#bbdefb", 25: "#90caf9", 32: "#64b5f6",
+    20: "#bbdefb", 25: "#90caf9", 32: "#64b5f6",
     40: "#42a5f5", 50: "#2196f3", 63: "#1976d2", 75: "#0d47a1",
 }
 
@@ -61,9 +67,12 @@ with col_params:
     glycol_pct = int(sp.get("glycol_pct", 30))
     t_sup = sp.get("t_supply_C", 7.0)
     t_ret = sp.get("t_return_C", 12.0)
+    v_main   = sp.get("v_max_main_ms", 1.5)
+    v_branch = sp.get("v_max_branch_ms", 0.7)
     st.info(
         f"System: VL {t_sup}°C / RL {t_ret}°C — "
         f"{sp.get('glycol_type','Ethylenglykol')} {glycol_pct}% — "
+        f"v_max Stamm: {v_main} m/s, Abzweig: {v_branch} m/s — "
         f"Netzwerk: {len(nodes)} Knoten, {len(edges)} Segmente"
     )
 
@@ -95,6 +104,24 @@ results = st.session_state.calc_results
 if not results:
     st.info("Bitte Berechnung ausführen.")
     st.stop()
+
+# ---------------------------------------------------------------------------
+# Velocity warnings — show per segment with red box
+# ---------------------------------------------------------------------------
+vel_warns = results.get("velocity_warnings", [])
+if vel_warns:
+    st.markdown("---")
+    st.markdown("## ⚠️ Geschwindigkeitswarnungen")
+    st.error(f"{len(vel_warns)} Segment(e) überschreiten den zulässigen Geschwindigkeitsgrenzwert!")
+    for w in vel_warns:
+        st.markdown(
+            f'<div class="warn-box">'
+            f'<strong>Segment {w["from"]} → {w["to"]}</strong> (DN{w["nominal_dn"]}): '
+            f'v = {w["velocity_ms"]:.3f} m/s &gt; Grenzwert {w["v_limit_ms"]:.1f} m/s — '
+            f'Bitte Rohrdurchmesser vergrössern oder Grenzwert anpassen.'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
 # ---------------------------------------------------------------------------
 # Overview metrics
@@ -166,17 +193,19 @@ seg_data = results["segment_summary"]
 df_seg   = pd.DataFrame(seg_data)
 
 display_cols = {
-    "edge_id":          "Segment-ID",
-    "from":             "Von",
-    "to":               "Nach",
-    "flow_kW":          "Last [kW]",
-    "nominal_dn":       "Rohr DN",
-    "length_m":         "Länge [m]",
-    "velocity_m_s":     "Geschw. [m/s]",
-    "dp_pipe_Pa":       "ΔP Rohr [Pa]",
-    "dp_fittings_Pa":   "ΔP Formteile [Pa]",
-    "dp_total_kPa":     "ΔP gesamt [kPa]",
-    "on_critical_path": "Krit. Pfad",
+    "edge_id":           "Segment-ID",
+    "from":              "Von",
+    "to":                "Nach",
+    "flow_kW":           "Last [kW]",
+    "nominal_dn":        "Rohr DN",
+    "length_m":          "Länge [m]",
+    "velocity_m_s":      "Geschw. [m/s]",
+    "v_limit_ms":        "Grenzwert [m/s]",
+    "velocity_exceeded": "v überschritten",
+    "dp_pipe_Pa":        "ΔP Rohr [Pa]",
+    "dp_fittings_Pa":    "ΔP Formteile [Pa]",
+    "dp_total_kPa":      "ΔP gesamt [kPa]",
+    "on_critical_path":  "Krit. Pfad",
 }
 
 df_display = df_seg[[c for c in display_cols if c in df_seg.columns]].copy()
@@ -186,6 +215,7 @@ for col, fmt in [
     ("Last [kW]",          "{:.2f}"),
     ("Länge [m]",          "{:.1f}"),
     ("Geschw. [m/s]",      "{:.3f}"),
+    ("Grenzwert [m/s]",    "{:.1f}"),
     ("ΔP Rohr [Pa]",       "{:.1f}"),
     ("ΔP Formteile [Pa]",  "{:.1f}"),
     ("ΔP gesamt [kPa]",    "{:.3f}"),
@@ -245,7 +275,7 @@ with chart_col2:
         fig_dn = go.Figure()
         fig_dn.add_bar(
             x=labels_dn, y=lengths,
-            marker_color=["#90caf9" if "16" in k else "#1976d2" for k in labels_dn],
+            marker_color=["#90caf9" if "20" in k else "#1976d2" for k in labels_dn],
             text=[f"{l:.1f}m ({c}×)" for l, c in zip(lengths, counts)],
             textposition="outside",
         )
@@ -264,19 +294,20 @@ if seg_data:
     colors_v   = []
     for s in seg_data:
         v = s["velocity_m_s"]
-        if v > 1.5:
-            colors_v.append("#d32f2f")
-        elif v > 1.0:
-            colors_v.append("#f57c00")
+        v_lim = s.get("v_limit_ms", v_main)
+        if v > v_lim:
+            colors_v.append("#d32f2f")  # exceeded — red
+        elif v > v_lim * 0.85:
+            colors_v.append("#f57c00")  # near limit — orange
         else:
-            colors_v.append("#388e3c")
+            colors_v.append("#388e3c")  # ok — green
 
     fig_v = go.Figure()
     fig_v.add_bar(x=labels_v, y=velocities, marker_color=colors_v)
-    fig_v.add_hline(y=1.5, line_dash="dash", line_color="#d32f2f",
-                    annotation_text="Max. Hauptleitung 1.5 m/s", annotation_position="top right")
-    fig_v.add_hline(y=1.0, line_dash="dash", line_color="#f57c00",
-                    annotation_text="Max. Stichleitung 1.0 m/s", annotation_position="top right")
+    fig_v.add_hline(y=v_main, line_dash="dash", line_color="#d32f2f",
+                    annotation_text=f"Max. Hauptleitung {v_main} m/s", annotation_position="top right")
+    fig_v.add_hline(y=v_branch, line_dash="dash", line_color="#f57c00",
+                    annotation_text=f"Max. Stichleitung {v_branch} m/s", annotation_position="top right")
     fig_v.update_layout(
         xaxis_tickangle=-45,
         yaxis_title="Geschwindigkeit [m/s]",
@@ -285,6 +316,94 @@ if seg_data:
         showlegend=False,
     )
     st.plotly_chart(fig_v, use_container_width=True)
+
+# ---------------------------------------------------------------------------
+# Systemwasserinhalt — water/glycol breakdown
+# ---------------------------------------------------------------------------
+st.markdown("---")
+st.markdown("## Systemwasserinhalt")
+st.markdown("Aufschlüsselung des Gesamtvolumens nach Komponenten und Wasser/Glykol-Anteil.")
+
+total_vol_L  = vol["total_volume_L"]
+pipe_vol_L   = vol.get("pipe_volume_L", total_vol_L)
+fc_vol_L     = vol.get("fc_volume_L", 0.0)
+evap_vol_L   = vol.get("chiller_evap_L", 0.0)
+buffer_vol_L = vol.get("buffer_tank_L", 0.0)
+
+glycol_pct_val = float(sp.get("glycol_pct", 30))
+water_vol_L  = total_vol_L * (1 - glycol_pct_val / 100.0)
+glycol_vol_L = total_vol_L * (glycol_pct_val / 100.0)
+
+# Volume breakdown table
+vol_table = []
+if pipe_vol_L > 0:
+    vol_table.append({"Komponente": "Rohrleitungen", "Volumen [L]": round(pipe_vol_L, 2), "Anteil [%]": round(pipe_vol_L / total_vol_L * 100, 1) if total_vol_L > 0 else 0})
+if fc_vol_L > 0:
+    vol_table.append({"Komponente": "Gebläsekonvektoren", "Volumen [L]": round(fc_vol_L, 2), "Anteil [%]": round(fc_vol_L / total_vol_L * 100, 1) if total_vol_L > 0 else 0})
+if evap_vol_L > 0:
+    vol_table.append({"Komponente": "Verdampfer Kältemaschine", "Volumen [L]": round(evap_vol_L, 2), "Anteil [%]": round(evap_vol_L / total_vol_L * 100, 1) if total_vol_L > 0 else 0})
+if buffer_vol_L > 0:
+    vol_table.append({"Komponente": "Pufferspeicher", "Volumen [L]": round(buffer_vol_L, 2), "Anteil [%]": round(buffer_vol_L / total_vol_L * 100, 1) if total_vol_L > 0 else 0})
+vol_table.append({"Komponente": "Gesamtvolumen", "Volumen [L]": round(total_vol_L, 2), "Anteil [%]": 100.0})
+
+vol_col1, vol_col2, vol_col3 = st.columns(3)
+
+with vol_col1:
+    st.metric("Gesamtvolumen",          f"{total_vol_L:.1f} L (100%)")
+    st.metric(f"Wasseranteil ({100-glycol_pct_val:.0f}%)",  f"{water_vol_L:.1f} L")
+    st.metric(f"Glykolanteil ({glycol_pct_val:.0f}%)",     f"{glycol_vol_L:.1f} L")
+    st.markdown("---")
+    st.dataframe(pd.DataFrame(vol_table), use_container_width=True, hide_index=True)
+
+with vol_col2:
+    # Pie chart — component breakdown
+    if vol_table and total_vol_L > 0:
+        labels_pie  = [r["Komponente"] for r in vol_table if r["Komponente"] != "Gesamtvolumen"]
+        values_pie  = [r["Volumen [L]"] for r in vol_table if r["Komponente"] != "Gesamtvolumen"]
+        if labels_pie:
+            fig_pie = go.Figure(go.Pie(
+                labels=labels_pie,
+                values=values_pie,
+                hole=0.35,
+                marker_colors=["#1976d2", "#2e7d32", "#f57c00", "#7b1fa2"],
+            ))
+            fig_pie.update_layout(
+                title="Volumenaufteilung nach Komponenten",
+                height=320,
+                margin=dict(l=10, r=10, t=50, b=10),
+                showlegend=True,
+                legend=dict(orientation="v"),
+            )
+            st.plotly_chart(fig_pie, use_container_width=True)
+
+with vol_col3:
+    # Pie chart — water vs glycol
+    if total_vol_L > 0 and glycol_pct_val > 0:
+        fig_wg = go.Figure(go.Pie(
+            labels=[f"Wasser ({100-glycol_pct_val:.0f}%)", f"Glykol ({glycol_pct_val:.0f}%)"],
+            values=[round(water_vol_L, 2), round(glycol_vol_L, 2)],
+            hole=0.35,
+            marker_colors=["#42a5f5", "#26a69a"],
+        ))
+        fig_wg.update_layout(
+            title=f"Wasser/Glykol-Aufteilung ({sp.get('glycol_type','EG')} {glycol_pct_val:.0f}%)",
+            height=320,
+            margin=dict(l=10, r=10, t=50, b=10),
+        )
+        st.plotly_chart(fig_wg, use_container_width=True)
+
+# Per-DN water volume breakdown
+if vol.get("volume_by_dn"):
+    st.markdown("**Wasserinhalt nach Rohrdurchmesser (Leitungen)**")
+    dn_vol_rows = []
+    for dn in sorted(vol["volume_by_dn"].keys()):
+        v_dn = vol["volume_by_dn"][dn]
+        dn_vol_rows.append({
+            "Rohr DN": f"DN{dn}",
+            "Wasserinhalt [L]": round(v_dn, 3),
+            "Anteil [%]": round(v_dn / pipe_vol_L * 100, 1) if pipe_vol_L > 0 else 0,
+        })
+    st.dataframe(pd.DataFrame(dn_vol_rows), use_container_width=True, hide_index=True)
 
 # ---------------------------------------------------------------------------
 # Fluid properties

@@ -144,6 +144,23 @@ with st.sidebar:
         st.error(f"Gefrierpunkt {fp:.1f} °C — Frostschutz unzureichend!")
 
     st.markdown("---")
+    st.markdown("### Rohrgeschwindigkeiten")
+    v_main = st.number_input(
+        "Max. Stammleitung [m/s]",
+        value=float(sp.get("v_max_main_ms", 1.5)),
+        min_value=0.3, max_value=3.0, step=0.1,
+        key="sidebar_v_main",
+    )
+    v_branch = st.number_input(
+        "Max. Abzweigleitung [m/s]",
+        value=float(sp.get("v_max_branch_ms", 0.7)),
+        min_value=0.3, max_value=2.0, step=0.1,
+        key="sidebar_v_branch",
+    )
+    sp["v_max_main_ms"]   = v_main
+    sp["v_max_branch_ms"] = v_branch
+
+    st.markdown("---")
     st.markdown("### Auslegungsbedingungen")
     sp["t_ambient_design_C"] = st.number_input(
         "Aussentemp. Auslegung [°C]",
@@ -170,6 +187,25 @@ with st.sidebar:
     """)
 
     st.session_state.system_params = sp
+
+    # Imwinkelried logo and link at the bottom of sidebar
+    st.markdown("---")
+    st.markdown(
+        '<div style="text-align:center; padding:10px;">'
+        '<a href="https://www.imwinkelried.ch" target="_blank">'
+        '<img src="https://www.imwinkelried.ch/typo3conf/ext/iwl_base/Resources/Public/Images/logo.svg" '
+        'style="max-width:160px;" alt="Imwinkelried Lüftung und Klima"/>'
+        '</a><br>'
+        '<small><a href="https://www.imwinkelried.ch" target="_blank">imwinkelried.ch</a></small>'
+        '</div>',
+        unsafe_allow_html=True
+    )
+    st.markdown(
+        '<div style="text-align:center;">'
+        '<a href="https://www.imwinkelried.ch" target="_blank" style="font-weight:bold; font-size:14px;">'
+        '🌡️ Imwinkelried Lüftung + Klima AG</a></div>',
+        unsafe_allow_html=True
+    )
 
 # ---------------------------------------------------------------------------
 # Main page content
@@ -199,6 +235,15 @@ with col4:
     st.page_link("pages/4_📈_Technical_Report.py",       label="**Technischer Bericht**", icon="📈")
     st.caption("Systemzusammenfassung, Ausdruck")
 
+col5, col6 = st.columns(2)
+with col5:
+    st.page_link("pages/5_📚_Bibliothek.py",             label="**Bibliothek**",          icon="📚")
+    st.caption("Geräte-Bibliothek verwalten, Import/Export")
+
+with col6:
+    st.page_link("pages/6_🏠_Loxone_Steuerung.py",       label="**Loxone Steuerung**",    icon="🏠")
+    st.caption("Gebäudeautomation mit Loxone konfigurieren")
+
 st.markdown("---")
 
 st.markdown("## Schnellstart")
@@ -213,6 +258,7 @@ with c1:
 3. **Hydraulikberechnung** ausführen — automatische Rohrdimensionierung
 4. **Materialliste** prüfen und als Excel exportieren
 5. **Technischen Bericht** für die Dokumentation generieren
+6. **Loxone Steuerung** für die Gebäudeautomation konfigurieren
 
 ### Systemauslegung
 
@@ -221,9 +267,9 @@ with c1:
 | Vorlauftemperatur | 7 °C |
 | Rücklauftemperatur | 12 °C |
 | Temperaturdifferenz | 5 K |
-| Rohrsystem | Geberit FlowFit (Ø16–Ø75) |
-| Max. Geschwindigkeit (Hauptleitung) | 1.5 m/s |
-| Max. Geschwindigkeit (Stichleitung) | 1.0 m/s |
+| Rohrsystem | Geberit FlowFit (Ø20–Ø75) |
+| Max. Geschwindigkeit (Hauptleitung) | 1.5 m/s (einstellbar) |
+| Max. Geschwindigkeit (Stichleitung) | 0.7 m/s (einstellbar) |
 | Max. spez. Druckverlust | 150 Pa/m |
     """)
 
@@ -237,6 +283,8 @@ with c2:
 - EER: 3.22
 - Kältemittel: R32
 - Pumpe integriert: 96.8 kPa
+- Pufferspeicher 60 L integriert
+- Ausdehnungsgefäss 8 L integriert
     """)
 
     st.markdown("**Innengeräte (Gebläsekonvektoren)**")
@@ -252,17 +300,18 @@ with c2:
     st.markdown("**Rohrleitungssystem**")
     st.warning("""
 **Geberit FlowFit**
-- Ø16 bis Ø75 mm
+- Ø20 bis Ø75 mm (DN16 entfernt)
 - 30% / 40% Ethylenglykol
-- Tabellen nach Herstellerdaten
+- Artikelnummern im Katalog
     """)
 
 st.markdown("---")
 st.markdown("""
 <small style="color: #888;">
-Kaltwasser Designer v2.0 — Werkzeug für HLK-Ingenieure |
+Kaltwasser Designer v3.0 — Werkzeug für HLK-Ingenieure |
 Rohrdruckverlust-Daten: Geberit FlowFit |
 Kältemaschine: Climaveneta i-BX2-G07 27Y |
-Gebläsekonvektoren: Kampmann KaCool W Gr. 1–4
+Gebläsekonvektoren: Kampmann KaCool W Gr. 1–4 |
+<a href="https://www.imwinkelried.ch" target="_blank">Imwinkelried Lüftung + Klima AG</a>
 </small>
 """, unsafe_allow_html=True)

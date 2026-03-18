@@ -28,6 +28,9 @@ DEFAULT_SYSTEM_PARAMS = {
     "altitude_m":         400,
     "t_indoor_design_C":  27.0,
     "rh_indoor_pct":      50,
+    # Velocity limits (adjustable in app sidebar)
+    "v_max_main_ms":      1.5,   # max velocity main pipe [m/s]
+    "v_max_branch_ms":    0.7,   # max velocity branch pipes [m/s]
 }
 
 DEFAULT_NODES: List[Dict] = []
@@ -45,6 +48,11 @@ def init_session_state(st) -> None:
         st.session_state.edges = list(DEFAULT_EDGES)
     if "system_params" not in st.session_state:
         st.session_state.system_params = dict(DEFAULT_SYSTEM_PARAMS)
+    else:
+        # Ensure new keys are present if upgrading from older session
+        for k, v in DEFAULT_SYSTEM_PARAMS.items():
+            if k not in st.session_state.system_params:
+                st.session_state.system_params[k] = v
     if "calc_results" not in st.session_state:
         st.session_state.calc_results = None
     if "selected_node" not in st.session_state:
@@ -53,6 +61,8 @@ def init_session_state(st) -> None:
         st.session_state.custom_chillers = []
     if "custom_fan_coils" not in st.session_state:
         st.session_state.custom_fan_coils = []
+    if "node_positions" not in st.session_state:
+        st.session_state.node_positions = {}
 
 
 def make_node_id() -> str:
@@ -82,6 +92,21 @@ def network_from_json(json_str: str):
     """Deserialise a network from a JSON string. Returns (nodes, edges, system_params)."""
     data = json.loads(json_str)
     return data.get("nodes", []), data.get("edges", []), data.get("system_params", {})
+
+
+def library_to_json(custom_chillers: List[Dict], custom_fan_coils: List[Dict]) -> str:
+    """Serialise custom device libraries to JSON."""
+    return json.dumps(
+        {"custom_chillers": custom_chillers, "custom_fan_coils": custom_fan_coils},
+        indent=2,
+        ensure_ascii=False,
+    )
+
+
+def library_from_json(json_str: str):
+    """Deserialise custom device libraries. Returns (custom_chillers, custom_fan_coils)."""
+    data = json.loads(json_str)
+    return data.get("custom_chillers", []), data.get("custom_fan_coils", [])
 
 
 # ---------------------------------------------------------------------------

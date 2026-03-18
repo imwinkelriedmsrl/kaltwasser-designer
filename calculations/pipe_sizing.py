@@ -3,6 +3,9 @@ Pipe sizing module for Geberit FlowFit chilled water systems.
 
 Uses the pressure-drop lookup tables in data/geberit_flowfit.py to select
 the optimal pipe diameter for a given flow and design criteria.
+
+Minimum pipe size is DN20 (DN16 removed from catalogue).
+Velocity limits are configurable via system_params.
 """
 
 from typing import Dict, Tuple, List, Optional
@@ -19,6 +22,13 @@ from data.geberit_flowfit import (
 
 
 # ---------------------------------------------------------------------------
+# Default velocity limits (can be overridden via system_params)
+# ---------------------------------------------------------------------------
+DEFAULT_V_MAX_MAIN_MS   = 1.5  # main pipes
+DEFAULT_V_MAX_BRANCH_MS = 0.7  # branch pipes (to fan coils)
+
+
+# ---------------------------------------------------------------------------
 # Public wrappers / extended logic
 # ---------------------------------------------------------------------------
 
@@ -26,13 +36,16 @@ def size_pipe(
     flow_W: float,
     glycol_pct: int = 30,
     is_branch: bool = False,
+    v_max_main: float = DEFAULT_V_MAX_MAIN_MS,
+    v_max_branch: float = DEFAULT_V_MAX_BRANCH_MS,
 ) -> Tuple[int, Dict]:
     """
     Select the smallest Geberit FlowFit pipe satisfying design criteria.
+    Minimum pipe size is DN20.
 
-    Design criteria (per VDI 2035 / SWKI):
-      - Main pipes  (is_branch=False): v ≤ 1.5 m/s, ΔP ≤ 1.5 mbar/m
-      - Branch pipes (is_branch=True):  v ≤ 1.0 m/s, ΔP ≤ 1.5 mbar/m
+    Design criteria (configurable, default per VDI 2035 / SWKI):
+      - Main pipes  (is_branch=False): v ≤ v_max_main m/s, ΔP ≤ 1.5 mbar/m
+      - Branch pipes (is_branch=True): v ≤ v_max_branch m/s, ΔP ≤ 1.5 mbar/m
 
     Parameters
     ----------
@@ -42,12 +55,16 @@ def size_pipe(
         Glycol concentration [%]
     is_branch : bool
         True for branch pipes (lower velocity limit)
+    v_max_main : float
+        Maximum velocity for main pipes [m/s]
+    v_max_branch : float
+        Maximum velocity for branch pipes [m/s]
 
     Returns
     -------
     (nominal_dn, pipe_data_dict)
     """
-    max_v = 1.0 if is_branch else 1.5
+    max_v = v_max_branch if is_branch else v_max_main
     return _ff_size_pipe(flow_W, glycol_pct=glycol_pct, max_velocity_m_s=max_v, max_dp_mbar_m=1.5)
 
 
@@ -86,7 +103,7 @@ def calculate_segment_dp(
     length_m : float
         Pipe length [m]
     nominal_dn : int
-        Selected pipe diameter
+        Selected pipe diameter (minimum DN20)
     glycol_pct : int
         Glycol concentration [%]
     fittings : dict, optional
@@ -142,6 +159,8 @@ def calculate_pipe_water_content(
 def size_all_segments(
     segments: List[Dict],
     glycol_pct: int = 30,
+    v_max_main: float = DEFAULT_V_MAX_MAIN_MS,
+    v_max_branch: float = DEFAULT_V_MAX_BRANCH_MS,
 ) -> List[Dict]:
     """
     Size all pipe segments in a network.
@@ -155,25 +174,29 @@ def size_all_segments(
         is_branch   – bool
         fittings    – dict {fitting_type: count}
     glycol_pct : int
+    v_max_main : float
+        Max velocity for main pipes [m/s]
+    v_max_branch : float
+        Max velocity for branch pipes [m/s]
 
     Returns
     -------
     Same list with added keys:
         nominal_dn, velocity_m_s, pressure_drop_mbar_m,
         dp_pipe_Pa, dp_fittings_Pa, dp_total_Pa, dp_total_kPa,
-        water_content_L
+        water_content_L, velocity_exceeded
     """
     result = []
     for seg in segments:
-        flow_W   = seg.get("flow_W", 0.0)
-        length_m = seg.get("length_m", 0.0)
+        flow_W    = seg.get("flow_W", 0.0)
+        length_m  = seg.get("length_m", 0.0)
         is_branch = seg.get("is_branch", False)
         fittings  = seg.get("fittings", {})
 
         if flow_W <= 0:
             seg = dict(seg)
             seg.update({
-                "nominal_dn": 16,
+                "nominal_dn": 20,
                 "velocity_m_s": 0.0,
                 "pressure_drop_mbar_m": 0.0,
                 "dp_pipe_Pa": 0.0,
@@ -181,13 +204,20 @@ def size_all_segments(
                 "dp_total_Pa": 0.0,
                 "dp_total_kPa": 0.0,
                 "water_content_L": 0.0,
+                "velocity_exceeded": False,
             })
             result.append(seg)
             continue
 
-        dn, _ = size_pipe(flow_W, glycol_pct=glycol_pct, is_branch=is_branch)
+        dn, _ = size_pipe(
+            flow_W, glycol_pct=glycol_pct, is_branch=is_branch,
+            v_max_main=v_max_main, v_max_branch=v_max_branch
+        )
         dp_data = calculate_segment_dp(flow_W, length_m, dn, glycol_pct, fittings)
         wc = calculate_pipe_water_content(dn, length_m)
+
+        v_limit = v_max_branch if is_branch else v_max_main
+        velocity_exceeded = dp_data["velocity_m_s"] > v_limit
 
         seg = dict(seg)
         seg.update({
@@ -199,6 +229,7 @@ def size_all_segments(
             "dp_total_Pa":             dp_data["dp_total_Pa"],
             "dp_total_kPa":            dp_data["dp_total_kPa"],
             "water_content_L":         wc,
+            "velocity_exceeded":       velocity_exceeded,
         })
         result.append(seg)
     return result

@@ -5,6 +5,8 @@ Sources:
   - Climaveneta i-BX2-G07 27Y datasheet
   - Kampmann KaCool W (art. 324001122000M1 – 324001242000M1) datasheet
     www.kampmann.ch
+  - Loxone product catalogue
+    www.loxone.ch
 """
 
 from typing import Dict, Any, List
@@ -58,6 +60,19 @@ CHILLERS: Dict[str, Dict[str, Any]] = {
         "t_ambient_max_C":       46,
         "t_water_supply_min_C":  5,
         "t_water_supply_max_C":  20,
+        # Water volume in evaporator
+        "water_volume_evaporator_L": 1.97,
+        # Expansion vessel (integrated)
+        "expansion_vessel_L":         8,
+        "expansion_vessel_integrated": True,
+        # Safety valve (integrated)
+        "safety_valve_bar":           3.0,
+        "safety_valve_integrated":    True,
+        # Buffer tank (integrated)
+        "buffer_tank_L":              60,
+        "buffer_tank_integrated":     True,
+        "buffer_tank_model":          "BTB60",
+        "buffer_tank_article":        "B00ZZ00010",
         # Article number / cost reference
         "article":               "i-BX2-G07-27Y",
         "unit_price_chf":        None,
@@ -94,6 +109,7 @@ FAN_COILS: Dict[str, Dict[str, Any]] = {
         "water_flow_lh":        291,
         "water_resistance_kPa": 15.2,
         "water_content_L":      0.75,
+        "water_volume_L":       0.75,
         # Physical
         "height_mm":            185,
         "width_mm":             333,
@@ -130,6 +146,7 @@ FAN_COILS: Dict[str, Dict[str, Any]] = {
         "water_flow_lh":        395,
         "water_resistance_kPa": 27.0,
         "water_content_L":      1.0,
+        "water_volume_L":       1.0,
         "height_mm":            185,
         "width_mm":             333,
         "length_mm":            830,
@@ -162,6 +179,7 @@ FAN_COILS: Dict[str, Dict[str, Any]] = {
         "water_flow_lh":        545,
         "water_resistance_kPa": 47.5,
         "water_content_L":      1.3,
+        "water_volume_L":       1.3,
         "height_mm":            185,
         "width_mm":             333,
         "length_mm":            1030,
@@ -194,6 +212,7 @@ FAN_COILS: Dict[str, Dict[str, Any]] = {
         "water_flow_lh":        696,
         "water_resistance_kPa": 67.6,
         "water_content_L":      1.6,
+        "water_volume_L":       1.6,
         "height_mm":            185,
         "width_mm":             333,
         "length_mm":            1235,
@@ -203,6 +222,83 @@ FAN_COILS: Dict[str, Dict[str, Any]] = {
         "control_signal":       "0-10V / PWM",
         "voltage_range_V":      "2-10",
         "unit_price_chf":       None,
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# Loxone product catalogue
+# ---------------------------------------------------------------------------
+
+LOXONE_PRODUCTS: Dict[str, Dict[str, Any]] = {
+    # Miniserver
+    "Miniserver": {
+        "article": "100100", "manufacturer": "Loxone",
+        "desc": "Loxone Miniserver", "category": "Miniserver",
+        "digital_in": 12, "analog_in": 8, "digital_out": 12, "analog_out": 4,
+        "modbus_rtu": True, "modbus_tcp": True, "knx": True,
+        "price_chf": None,
+    },
+    "Miniserver_Compact": {
+        "article": "100222", "manufacturer": "Loxone",
+        "desc": "Loxone Miniserver Compact", "category": "Miniserver",
+        "digital_in": 6, "analog_in": 4, "digital_out": 6, "analog_out": 2,
+        "modbus_rtu": True, "modbus_tcp": True, "knx": False,
+        "price_chf": None,
+    },
+    "Miniserver_Go": {
+        "article": "100310", "manufacturer": "Loxone",
+        "desc": "Loxone Miniserver Go", "category": "Miniserver",
+        "digital_in": 0, "analog_in": 0, "digital_out": 0, "analog_out": 0,
+        "modbus_rtu": False, "modbus_tcp": True, "knx": False,
+        "price_chf": None,
+    },
+    # Bedienung
+    "Touch": {
+        "article": "100094", "manufacturer": "Loxone",
+        "desc": "Loxone Touch", "category": "Bedienung",
+        "price_chf": None,
+    },
+    "Touch_Pure": {
+        "article": "100117", "manufacturer": "Loxone",
+        "desc": "Loxone Touch Pure", "category": "Bedienung",
+        "price_chf": None,
+    },
+    "Nano_IO_Air": {
+        "article": "200073", "manufacturer": "Loxone",
+        "desc": "Loxone Nano IO Air", "category": "Bedienung",
+        "price_chf": None,
+    },
+    # Extensions
+    "RS485_Extension": {
+        "article": "100062", "manufacturer": "Loxone",
+        "desc": "Loxone RS232/RS485 Extension (Modbus RTU)", "category": "Extension",
+        "price_chf": None,
+    },
+    "Ethernet_Extension": {
+        "article": "100070", "manufacturer": "Loxone",
+        "desc": "Loxone Ethernet Extension", "category": "Extension",
+        "price_chf": None,
+    },
+    "1Wire_Extension": {
+        "article": "100013", "manufacturer": "Loxone",
+        "desc": "Loxone 1-Wire Extension", "category": "Extension",
+        "price_chf": None,
+    },
+    "Relay_Extension": {
+        "article": "100015", "manufacturer": "Loxone",
+        "desc": "Loxone Relay Extension", "category": "Extension",
+        "price_chf": None,
+    },
+    "Dimmer_Extension": {
+        "article": "100016", "manufacturer": "Loxone",
+        "desc": "Loxone Dimmer Extension", "category": "Extension",
+        "price_chf": None,
+    },
+    "DMX_Extension": {
+        "article": "100018", "manufacturer": "Loxone",
+        "desc": "Loxone DMX Extension", "category": "Extension",
+        "price_chf": None,
     },
 }
 
@@ -261,3 +357,9 @@ def get_fan_coil_flow_lh(model_key: str) -> float:
 def get_fan_coil_dp_kPa(model_key: str) -> float:
     """Return water-side pressure drop in kPa."""
     return float(FAN_COILS[model_key]["water_resistance_kPa"])
+
+
+def get_fan_coil_water_volume_L(model_key: str) -> float:
+    """Return water volume in litres for a fan coil."""
+    fc = FAN_COILS.get(model_key, {})
+    return float(fc.get("water_volume_L", fc.get("water_content_L", 1.0)))

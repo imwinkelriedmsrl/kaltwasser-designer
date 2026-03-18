@@ -1,6 +1,7 @@
 """
 Technischer Bericht — Seite 4
 Systemzusammenfassung, Leistungsdaten, Lärmbewertung, Kältemitteldaten.
+Enthält: Pufferspeicher, Ausdehnungsgefäss, Sicherheitsventil im Kältemaschinen-Abschnitt.
 """
 
 import streamlit as st
@@ -55,6 +56,14 @@ st.markdown("""
 .spec-key { color: #555; }
 .spec-val { font-weight: 600; color: #212529; }
 .section-divider { border: none; border-top: 3px solid #1565C0; margin: 28px 0 20px 0; }
+.integrated-badge {
+    display: inline-block; background: #d4edda; color: #155724;
+    padding: 2px 8px; border-radius: 3px; font-size: 0.8rem; font-weight: 600;
+}
+.external-badge {
+    display: inline-block; background: #fff3cd; color: #856404;
+    padding: 2px 8px; border-radius: 3px; font-size: 0.8rem; font-weight: 600;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -85,10 +94,14 @@ if chiller_nodes:
     else:
         try:
             chiller_data = get_chiller(model)
-            # Merge pump data from node props
-            if "pump_head_kPa" in chiller_node_props:
-                chiller_data = dict(chiller_data)
-                chiller_data["pump_head_kPa"] = chiller_node_props["pump_head_kPa"]
+            # Merge pump data and auxiliary data from node props
+            chiller_data = dict(chiller_data)
+            for k in ("pump_head_kPa", "expansion_vessel_integrated", "expansion_vessel_L",
+                      "safety_valve_integrated", "safety_valve_bar",
+                      "buffer_tank_integrated", "buffer_tank_L",
+                      "buffer_tank_model", "buffer_tank_article"):
+                if k in chiller_node_props:
+                    chiller_data[k] = chiller_node_props[k]
         except Exception:
             pass
 
@@ -203,6 +216,62 @@ else:
             ("Abm. (L×B×H)",  f"{ch.get('length_mm','?')}×{ch.get('width_mm','?')}×{ch.get('height_mm','?')} mm"
              if ch.get("length_mm") else "—"),
             ("Gewicht",       f"{ch.get('weight_kg','?')} kg" if ch.get("weight_kg") else "—"),
+        ]:
+            st.markdown(
+                f'<div class="spec-row"><span class="spec-key">{k}</span>'
+                f'<span class="spec-val">{v}</span></div>',
+                unsafe_allow_html=True,
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # --- Expansion vessel, safety valve, buffer tank ---
+    st.markdown("### 2.1 Hydraulische Zusatzkomponenten")
+    aux_col1, aux_col2, aux_col3 = st.columns(3)
+
+    with aux_col1:
+        exp_int = ch.get("expansion_vessel_integrated", False)
+        exp_L   = ch.get("expansion_vessel_L", "—")
+        badge   = '<span class="integrated-badge">Integriert</span>' if exp_int else '<span class="external-badge">Extern erforderlich</span>'
+        st.markdown(f'<div class="data-card"><h4>Ausdehnungsgefäss {badge}</h4>', unsafe_allow_html=True)
+        for k, v in [
+            ("Status",   "Integriert" if exp_int else "Extern"),
+            ("Volumen",  f"{exp_L} L" if exp_L != "—" else "—"),
+        ]:
+            st.markdown(
+                f'<div class="spec-row"><span class="spec-key">{k}</span>'
+                f'<span class="spec-val">{v}</span></div>',
+                unsafe_allow_html=True,
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with aux_col2:
+        sv_int = ch.get("safety_valve_integrated", False)
+        sv_bar = ch.get("safety_valve_bar", "—")
+        badge  = '<span class="integrated-badge">Integriert</span>' if sv_int else '<span class="external-badge">Extern erforderlich</span>'
+        st.markdown(f'<div class="data-card"><h4>Sicherheitsventil {badge}</h4>', unsafe_allow_html=True)
+        for k, v in [
+            ("Status",           "Integriert" if sv_int else "Extern"),
+            ("Ansprechdruck",    f"{sv_bar} bar" if sv_bar != "—" else "—"),
+        ]:
+            st.markdown(
+                f'<div class="spec-row"><span class="spec-key">{k}</span>'
+                f'<span class="spec-val">{v}</span></div>',
+                unsafe_allow_html=True,
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with aux_col3:
+        buf_int    = ch.get("buffer_tank_integrated", False)
+        buf_L      = ch.get("buffer_tank_L", "—")
+        buf_model  = ch.get("buffer_tank_model", "—")
+        buf_art    = ch.get("buffer_tank_article", "—")
+        badge      = '<span class="integrated-badge">Integriert</span>' if buf_int else '<span class="external-badge">Extern erforderlich</span>'
+        st.markdown(f'<div class="data-card"><h4>Pufferspeicher {badge}</h4>', unsafe_allow_html=True)
+        for k, v in [
+            ("Status",       "Integriert" if buf_int else "Extern"),
+            ("Volumen",      f"{buf_L} L" if buf_L != "—" and buf_L else "—"),
+            ("Modell",       buf_model if buf_model != "—" else "—"),
+            ("Artikelnr.",   buf_art if buf_art != "—" else "—"),
         ]:
             st.markdown(
                 f'<div class="spec-row"><span class="spec-key">{k}</span>'
@@ -381,13 +450,21 @@ else:
 
     with col_h3:
         st.markdown('<div class="data-card"><h4>Systemvolumen</h4>', unsafe_allow_html=True)
-        exp = size_expansion_vessel(max(vol["total_volume_L"], 20.0), t_sup, glycol_pct=glycol_pct)
+        total_vol = vol["total_volume_L"]
+        glycol_pct_v = float(sp.get("glycol_pct", 30))
+        exp = size_expansion_vessel(max(total_vol, 20.0), t_sup, glycol_pct=glycol_pct)
         std_sizes = [8, 12, 18, 24, 35, 50, 80, 100]
         exp_std   = next((s for s in std_sizes if s >= exp["vn_L"]), std_sizes[-1])
         for k, v in [
-            ("Wasserinhalt Rohrleitungen", f"{vol['total_volume_L']:.1f} L"),
-            ("Mindesterfordernis",         f"{vol['min_required_L']:.1f} L"),
-            ("Ausreichend",                "Ja" if vol["adequate"] else "Nein"),
+            ("Wasserinhalt gesamt",         f"{total_vol:.1f} L"),
+            ("davon Rohrleitungen",          f"{vol.get('pipe_volume_L',0):.1f} L"),
+            ("davon Gebläsekonvektoren",     f"{vol.get('fc_volume_L',0):.1f} L"),
+            ("davon Verdampfer",             f"{vol.get('chiller_evap_L',0):.1f} L"),
+            ("davon Pufferspeicher",         f"{vol.get('buffer_tank_L',0):.1f} L"),
+            ("Mindesterfordernis",           f"{vol['min_required_L']:.1f} L"),
+            ("Ausreichend",                  "Ja" if vol["adequate"] else "Nein"),
+            ("Wasseranteil",                 f"{total_vol * (1-glycol_pct_v/100):.1f} L ({100-glycol_pct_v:.0f}%)"),
+            ("Glykolanteil",                 f"{total_vol * glycol_pct_v/100:.1f} L ({glycol_pct_v:.0f}%)"),
             ("Ausdehnungsgefäss (berechn.)", f"{exp['vn_L']:.1f} L"),
             ("Ausdehnungsgefäss (gewählt)",  f"{exp_std} L"),
             ("Vorladedruck",                 f"{exp['p0_bar']:.2f} bar"),
@@ -605,19 +682,20 @@ with fp_col1:
     st.markdown("</div>", unsafe_allow_html=True)
 
 with fp_col2:
-    st.markdown("**Geberit FlowFit — Rohrquerschnitte**")
+    st.markdown("**Geberit FlowFit — Rohrquerschnitte (DN20–DN75)**")
     pipe_rows_spec = []
     for dn, spec in FLOWFIT_PIPE_SPECS.items():
         di   = spec["di_mm"] / 1000.0
         area = np.pi * (spec["di_mm"] / 2) ** 2 / 100.0
-        vol  = np.pi * (di / 2) ** 2 * 1000.0
+        vol_pm = np.pi * (di / 2) ** 2 * 1000.0
         pipe_rows_spec.append({
             "DN":                    dn,
             "da [mm]":               spec["da_mm"],
             "di [mm]":               spec["di_mm"],
             "s [mm]":                spec["s_mm"],
+            "Artikelnummer":         spec.get("article", "—"),
             "Querschnitt [cm²]":     round(area, 3),
-            "Wasserinhalt [L/m]":    round(vol, 4),
+            "Wasserinhalt [L/m]":    round(vol_pm, 4),
         })
     st.dataframe(pd.DataFrame(pipe_rows_spec), use_container_width=True, hide_index=True)
 
@@ -645,5 +723,6 @@ st.markdown("</div>", unsafe_allow_html=True)
 st.markdown("---")
 st.caption(
     f"Kaltwasser Designer | Technischer Bericht erstellt am {now.strftime('%d.%m.%Y %H:%M')} | "
-    f"Projekt: {project_name} | Ingenieur: {engineer}"
+    f"Projekt: {project_name} | Ingenieur: {engineer} | "
+    f"Imwinkelried Lüftung + Klima AG — www.imwinkelried.ch"
 )

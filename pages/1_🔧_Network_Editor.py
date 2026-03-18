@@ -1,10 +1,11 @@
 """
 Netzwerk-Editor — Seite 1
-Automatisches Layout + Drag-and-Drop mit streamlit-agraph.
+Festes Layout mit Kältemaschine oben links + Drag-and-Drop.
 """
 
 import streamlit as st
 import json
+import uuid
 from typing import Dict, List, Any
 
 from streamlit_agraph import agraph, Node, Edge, Config
@@ -42,7 +43,7 @@ st.markdown("""
 st.markdown("# 🔧 Netzwerk-Editor")
 st.markdown(
     "Geräte hinzufügen und mit Rohrsegmenten verbinden. "
-    "Das Netzwerk wird automatisch layoutet — Knoten können per Drag-and-Drop verschoben werden."
+    "Kältemaschine wird oben links platziert — Knoten können per Drag-and-Drop verschoben werden."
 )
 
 # ---------------------------------------------------------------------------
@@ -65,17 +66,54 @@ def node_id_label(node: Dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Build agraph nodes + edges from session state
+# Build agraph nodes + edges from session state — fixed positions
 # ---------------------------------------------------------------------------
+
+def _get_fixed_position(node: Dict, index_by_type: Dict[str, int]) -> Dict:
+    """Return x, y fixed position for a node based on its type."""
+    ntype = node.get("type", "FAN_COIL")
+    positions = st.session_state.get("node_positions", {})
+    nid = node["id"]
+
+    # If user has dragged the node, use stored position
+    if nid in positions:
+        return positions[nid]
+
+    # Otherwise assign default position by type
+    idx = index_by_type.get(nid, 0)
+    if ntype == "CHILLER":
+        return {"x": 100 + idx * 200, "y": 100}
+    elif ntype == "T_JUNCTION":
+        return {"x": 300 + idx * 150, "y": 250}
+    elif ntype == "FAN_COIL":
+        return {"x": 100 + idx * 200, "y": 420}
+    elif ntype == "AIR_VENT":
+        return {"x": 650 + idx * 100, "y": 100}
+    elif ntype == "FILL_DRAIN":
+        return {"x": 650 + idx * 100, "y": 200}
+    else:
+        return {"x": 400 + idx * 150, "y": 300}
+
 
 def build_agraph(nodes: List[Dict], edges: List[Dict]):
     ag_nodes = []
     ag_edges = []
 
+    # Count index per type for position assignment
+    type_counters: Dict[str, int] = {}
+    index_by_type: Dict[str, int] = {}
+    for n in nodes:
+        ntype = n.get("type", "FAN_COIL")
+        idx = type_counters.get(ntype, 0)
+        index_by_type[n["id"]] = idx
+        type_counters[ntype] = idx + 1
+
     for n in nodes:
         ntype = n.get("type", "FAN_COIL")
         color = NODE_TYPES.get(ntype, {}).get("color", "#888888")
         label = node_display_label(n)
+        pos = _get_fixed_position(n, index_by_type)
+
         ag_nodes.append(
             Node(
                 id=n["id"],
@@ -83,6 +121,9 @@ def build_agraph(nodes: List[Dict], edges: List[Dict]):
                 size=25,
                 color=color,
                 font={"size": 11, "color": "#1a2332"},
+                x=pos["x"],
+                y=pos["y"],
+                fixed=False,  # allow drag
             )
         )
 
@@ -108,14 +149,14 @@ def build_agraph(nodes: List[Dict], edges: List[Dict]):
 
 
 # ---------------------------------------------------------------------------
-# agraph Config
+# agraph Config — fixed layout, no physics
 # ---------------------------------------------------------------------------
 
 AGRAPH_CONFIG = Config(
     width=900,
     height=600,
     directed=True,
-    physics=True,
+    physics=False,
     hierarchical=False,
     nodeHighlightBehavior=True,
     highlightColor="#F7A7A6",
@@ -131,7 +172,6 @@ AGRAPH_CONFIG = Config(
 def _chiller_library_form(prefix: str) -> Dict:
     """Render library chiller selector. Returns extra props dict."""
     lib_keys = list(CHILLERS.keys())
-    # Merge with custom chillers from session state
     custom_ch = st.session_state.get("custom_chillers", [])
     all_keys = lib_keys + [f"__custom__{c['_key']}" for c in custom_ch]
 
@@ -194,6 +234,57 @@ def _chiller_pump_fields(prefix: str, defaults: Dict) -> Dict:
     }
 
 
+def _chiller_auxiliary_fields(prefix: str, defaults: Dict) -> Dict:
+    """Render expansion vessel, safety valve, buffer tank fields. Returns props dict."""
+    st.markdown("**Ausdehnungsgefäss**")
+    exp_int = st.checkbox(
+        "Ausdehnungsgefäss integriert",
+        value=bool(defaults.get("expansion_vessel_integrated", False)),
+        key=f"{prefix}_exp_int",
+    )
+    exp_vol = st.number_input(
+        "Volumen [L]",
+        value=float(defaults.get("expansion_vessel_L", 8.0)),
+        min_value=0.0, max_value=500.0, step=1.0,
+        key=f"{prefix}_exp_vol",
+    )
+
+    st.markdown("**Sicherheitsventil**")
+    sv_int = st.checkbox(
+        "Sicherheitsventil integriert",
+        value=bool(defaults.get("safety_valve_integrated", False)),
+        key=f"{prefix}_sv_int",
+    )
+    sv_bar = st.number_input(
+        "Ansprechdruck [bar]",
+        value=float(defaults.get("safety_valve_bar", 3.0)),
+        min_value=0.5, max_value=10.0, step=0.5,
+        key=f"{prefix}_sv_bar",
+    )
+
+    st.markdown("**Pufferspeicher**")
+    buf_int = st.checkbox(
+        "Pufferspeicher integriert",
+        value=bool(defaults.get("buffer_tank_integrated", False)),
+        key=f"{prefix}_buf_int",
+    )
+    buf_vol = st.number_input(
+        "Volumen [L]",
+        value=float(defaults.get("buffer_tank_L", 0.0)),
+        min_value=0.0, max_value=2000.0, step=10.0,
+        key=f"{prefix}_buf_vol",
+    )
+
+    return {
+        "expansion_vessel_integrated": exp_int,
+        "expansion_vessel_L":          exp_vol,
+        "safety_valve_integrated":     sv_int,
+        "safety_valve_bar":            sv_bar,
+        "buffer_tank_integrated":      buf_int,
+        "buffer_tank_L":               buf_vol,
+    }
+
+
 def _chiller_custom_form(prefix: str) -> Dict:
     """Render custom chiller entry form. Returns props dict."""
     st.markdown("**Benutzerdefiniertes Aussengerät**")
@@ -213,7 +304,6 @@ def _chiller_custom_form(prefix: str) -> Dict:
     schall       = st.number_input("Schallleistung [dB(A)]", value=70.0, min_value=0.0, step=1.0, key=f"{prefix}_schall")
     notizen      = st.text_area("Notizen", value="", key=f"{prefix}_notizen")
 
-    import uuid
     _key = uuid.uuid4().hex[:8]
     return {
         "model":                 "custom",
@@ -288,7 +378,6 @@ def _fc_custom_form(prefix: str) -> Dict:
     schall      = st.number_input("Schallleistung [dB(A)]", value=35.0, min_value=0.0, step=1.0, key=f"{prefix}_fc_schall")
     notizen     = st.text_area("Notizen", value="", key=f"{prefix}_fc_notizen")
 
-    import uuid
     _key = uuid.uuid4().hex[:8]
     return {
         "model":        "custom",
@@ -350,20 +439,37 @@ with panel_col:
             )
             if ch_source == "Aus Bibliothek":
                 lib_props = _chiller_library_form("add_ch")
+                # Load defaults from library if available
+                ch_defaults = {}
+                if lib_props.get("model") and lib_props["model"] != "custom":
+                    try:
+                        ch_defaults = get_chiller(lib_props["model"])
+                    except Exception:
+                        pass
                 pump_defaults = {
-                    "pump_integrated":   True,
-                    "pump_head_kPa":     lib_props.get("pump_head_kPa", 96.8),
-                    "pump_flow_max_m3h": 5.5,
-                    "pump_type":         "Hocheffizienzpumpe EC",
+                    "pump_integrated":   ch_defaults.get("pump_integrated", True),
+                    "pump_head_kPa":     lib_props.get("pump_head_kPa", ch_defaults.get("pump_head_kPa", 96.8)),
+                    "pump_flow_max_m3h": ch_defaults.get("pump_flow_max_m3h", 5.5),
+                    "pump_type":         ch_defaults.get("pump_type", "Hocheffizienzpumpe EC"),
+                }
+                aux_defaults = {
+                    "expansion_vessel_integrated": ch_defaults.get("expansion_vessel_integrated", False),
+                    "expansion_vessel_L":          ch_defaults.get("expansion_vessel_L", 8.0),
+                    "safety_valve_integrated":     ch_defaults.get("safety_valve_integrated", False),
+                    "safety_valve_bar":            ch_defaults.get("safety_valve_bar", 3.0),
+                    "buffer_tank_integrated":      ch_defaults.get("buffer_tank_integrated", False),
+                    "buffer_tank_L":               ch_defaults.get("buffer_tank_L", 0.0),
                 }
                 pump_props = _chiller_pump_fields("add_ch", pump_defaults)
-                extra_props = {**lib_props, **pump_props}
+                aux_props  = _chiller_auxiliary_fields("add_ch_aux", aux_defaults)
+                extra_props = {**lib_props, **pump_props, **aux_props}
             else:
                 custom_props = _chiller_custom_form("add_ch")
                 pump_props = _chiller_pump_fields("add_ch_cust", {
                     "pump_head_kPa": custom_props.get("pump_head_kPa", 80.0),
                 })
-                extra_props = {**custom_props, **pump_props}
+                aux_props = _chiller_auxiliary_fields("add_ch_cust_aux", {})
+                extra_props = {**custom_props, **pump_props, **aux_props}
 
         # --- FAN_COIL form ---
         elif node_type == "FAN_COIL":
@@ -389,7 +495,7 @@ with panel_col:
                 "label": node_label,
                 "props": extra_props,
             }
-            # Save custom items to session state for reuse
+            # Save custom items to session state for reuse and library
             if node_type == "CHILLER" and extra_props.get("model") == "custom":
                 key_val = extra_props.get("_key", "")
                 if key_val and not any(c.get("_key") == key_val for c in st.session_state.custom_chillers):
@@ -403,6 +509,29 @@ with panel_col:
             st.session_state.calc_results = None
             st.success(f"Knoten '{node_label}' hinzugefügt.")
             st.rerun()
+
+        # "In Bibliothek speichern" button for library items
+        if node_type in ("CHILLER", "FAN_COIL"):
+            st.markdown("---")
+            if st.button("In Bibliothek speichern", use_container_width=True, key="btn_save_lib"):
+                if node_type == "CHILLER" and extra_props.get("model") == "custom":
+                    key_val = extra_props.get("_key", uuid.uuid4().hex[:8])
+                    extra_props["_key"] = key_val
+                    if not any(c.get("_key") == key_val for c in st.session_state.custom_chillers):
+                        st.session_state.custom_chillers.append(dict(extra_props))
+                        st.success("Aussengerät in Bibliothek gespeichert.")
+                    else:
+                        st.info("Gerät bereits in Bibliothek.")
+                elif node_type == "FAN_COIL" and extra_props.get("model") == "custom":
+                    key_val = extra_props.get("_key", uuid.uuid4().hex[:8])
+                    extra_props["_key"] = key_val
+                    if not any(c.get("_key") == key_val for c in st.session_state.custom_fan_coils):
+                        st.session_state.custom_fan_coils.append(dict(extra_props))
+                        st.success("Innengerät in Bibliothek gespeichert.")
+                    else:
+                        st.info("Gerät bereits in Bibliothek.")
+                else:
+                    st.info("Nur benutzerdefinierte Geräte können in der Bibliothek gespeichert werden.")
 
     # -------------------------------------------------------------------------
     elif mode == "Verbindungen":
@@ -536,6 +665,44 @@ with panel_col:
                     )
                     props["pump_head_kPa"] = new_pump_head
 
+                    # Edit buffer/expansion/safety
+                    st.markdown("**Ausdehnungsgefäss**")
+                    props["expansion_vessel_integrated"] = st.checkbox(
+                        "Integriert",
+                        value=bool(props.get("expansion_vessel_integrated", False)),
+                        key=f"edit_exp_int_{sel_id}",
+                    )
+                    props["expansion_vessel_L"] = st.number_input(
+                        "Volumen [L]",
+                        value=float(props.get("expansion_vessel_L", 8.0)),
+                        min_value=0.0, step=1.0,
+                        key=f"edit_exp_vol_{sel_id}",
+                    )
+                    st.markdown("**Sicherheitsventil**")
+                    props["safety_valve_integrated"] = st.checkbox(
+                        "Integriert",
+                        value=bool(props.get("safety_valve_integrated", False)),
+                        key=f"edit_sv_int_{sel_id}",
+                    )
+                    props["safety_valve_bar"] = st.number_input(
+                        "Ansprechdruck [bar]",
+                        value=float(props.get("safety_valve_bar", 3.0)),
+                        min_value=0.5, step=0.5,
+                        key=f"edit_sv_bar_{sel_id}",
+                    )
+                    st.markdown("**Pufferspeicher**")
+                    props["buffer_tank_integrated"] = st.checkbox(
+                        "Integriert",
+                        value=bool(props.get("buffer_tank_integrated", False)),
+                        key=f"edit_buf_int_{sel_id}",
+                    )
+                    props["buffer_tank_L"] = st.number_input(
+                        "Volumen [L]",
+                        value=float(props.get("buffer_tank_L", 0.0)),
+                        min_value=0.0, step=5.0,
+                        key=f"edit_buf_vol_{sel_id}",
+                    )
+
                 if st.button("Änderungen speichern", type="primary", key=f"save_edit_{sel_id}"):
                     st.session_state.nodes[idx]["label"] = new_label
                     st.session_state.nodes[idx]["props"] = props
@@ -565,6 +732,8 @@ with panel_col:
                     e for e in st.session_state.edges
                     if e["source"] != del_node_id and e["target"] != del_node_id
                 ]
+                # Remove stored position
+                st.session_state.node_positions.pop(del_node_id, None)
                 st.session_state.calc_results = None
                 st.success("Knoten gelöscht.")
                 st.rerun()
@@ -600,6 +769,7 @@ with panel_col:
             st.session_state.nodes = []
             st.session_state.edges = []
             st.session_state.calc_results = None
+            st.session_state.node_positions = {}
             st.rerun()
 
     # -------------------------------------------------------------------------
@@ -630,6 +800,7 @@ with panel_col:
                 st.session_state.edges = edges
                 st.session_state.system_params = sp
                 st.session_state.calc_results = None
+                st.session_state.node_positions = {}
                 st.success(f"Netzwerk geladen: {len(nodes)} Knoten, {len(edges)} Segmente.")
                 st.rerun()
             except Exception as e:
@@ -643,11 +814,17 @@ with panel_col:
                 "type":  "CHILLER",
                 "label": "KM-01",
                 "props": {
-                    "model":                "Climaveneta_iBX2_G07_27Y",
-                    "pump_head_kPa":        96.8,
-                    "pump_integrated":      True,
-                    "pump_type":            "Hocheffizienzpumpe EC",
-                    "pump_flow_max_m3h":    5.5,
+                    "model":                       "Climaveneta_iBX2_G07_27Y",
+                    "pump_head_kPa":               96.8,
+                    "pump_integrated":             True,
+                    "pump_type":                   "Hocheffizienzpumpe EC",
+                    "pump_flow_max_m3h":           5.5,
+                    "expansion_vessel_integrated": True,
+                    "expansion_vessel_L":          8.0,
+                    "safety_valve_integrated":     True,
+                    "safety_valve_bar":            3.0,
+                    "buffer_tank_integrated":      True,
+                    "buffer_tank_L":               60.0,
                 },
             }
             n_tj = {
@@ -721,6 +898,7 @@ with panel_col:
             st.session_state.nodes = [n_ch, n_tj, n_fc1, n_fc2, n_fc3]
             st.session_state.edges = [e1, e2, e3, e4]
             st.session_state.calc_results = None
+            st.session_state.node_positions = {}
             st.success("Beispielnetzwerk geladen.")
             st.rerun()
 
@@ -728,20 +906,32 @@ with panel_col:
 # ── RIGHT PANEL: agraph canvas ───────────────────────────────────────────────
 with canvas_col:
     st.markdown("### Netzwerk-Ansicht")
+    st.caption("Kältemaschine oben links — Knoten können per Drag-and-Drop verschoben werden.")
 
     if not st.session_state.nodes:
         st.info(
             "Noch keine Knoten vorhanden. "
-            "Fügen Sie links Geräte hinzu — sie werden automatisch platziert."
+            "Fügen Sie links Geräte hinzu — Kältemaschine wird automatisch oben links platziert."
         )
     else:
         ag_nodes, ag_edges = build_agraph(st.session_state.nodes, st.session_state.edges)
-        agraph(nodes=ag_nodes, edges=ag_edges, config=AGRAPH_CONFIG)
+        return_value = agraph(nodes=ag_nodes, edges=ag_edges, config=AGRAPH_CONFIG)
+
+        # Store node positions if agraph returns position data
+        if return_value and isinstance(return_value, dict):
+            positions = return_value.get("nodes", {})
+            if positions and isinstance(positions, dict):
+                for nid, pos_data in positions.items():
+                    if isinstance(pos_data, dict) and "x" in pos_data:
+                        st.session_state.node_positions[nid] = {
+                            "x": pos_data["x"],
+                            "y": pos_data["y"],
+                        }
 
     # Node summary table
     if st.session_state.nodes:
-        st.markdown("#### Knotenübersicht")
         import pandas as pd
+        st.markdown("#### Knotenübersicht")
         node_rows = []
         for n in st.session_state.nodes:
             type_label = NODE_TYPES.get(n.get("type", ""), {}).get("label", n.get("type", ""))
@@ -750,19 +940,30 @@ with canvas_col:
             if model_str == "custom":
                 model_str = f"[Benutzerdef.] {props.get('model_name', props.get('manufacturer', ''))}"
             room_str = props.get("room", n.get("room", ""))
+            buf_str = ""
+            if n.get("type") == "CHILLER":
+                parts = []
+                if props.get("buffer_tank_integrated"):
+                    parts.append(f"Puffer {props.get('buffer_tank_L',0):.0f}L")
+                if props.get("expansion_vessel_integrated"):
+                    parts.append(f"AG {props.get('expansion_vessel_L',0):.0f}L")
+                if props.get("safety_valve_integrated"):
+                    parts.append(f"SV {props.get('safety_valve_bar',3):.1f}bar")
+                buf_str = ", ".join(parts)
             node_rows.append({
                 "ID":          n["id"][:8],
                 "Typ":         type_label,
                 "Bezeichnung": n.get("label", ""),
                 "Modell/Info": model_str,
                 "Raum":        room_str,
+                "Integriert":  buf_str,
             })
         df_nodes = pd.DataFrame(node_rows)
         st.dataframe(df_nodes, use_container_width=True, hide_index=True)
 
     if st.session_state.edges:
-        st.markdown("#### Rohrsegmentübersicht")
         import pandas as pd
+        st.markdown("#### Rohrsegmentübersicht")
         node_map_lbl = {n["id"]: n.get("label", n["id"]) for n in st.session_state.nodes}
         edge_rows = []
         for e in st.session_state.edges:
@@ -771,11 +972,11 @@ with canvas_col:
             fit_str = ", ".join(f"{k}:{v}" for k, v in fit_src.items()) if fit_src else "—"
             dn = props.get("dn_sized")
             edge_rows.append({
-                "ID":          e["id"][:8],
-                "Von":         node_map_lbl.get(e["source"], e["source"]),
-                "Nach":        node_map_lbl.get(e["target"], e["target"]),
-                "Länge [m]":   e.get("length_m", 0),
-                "Formteile":   fit_str,
+                "ID":            e["id"][:8],
+                "Von":           node_map_lbl.get(e["source"], e["source"]),
+                "Nach":          node_map_lbl.get(e["target"], e["target"]),
+                "Länge [m]":     e.get("length_m", 0),
+                "Formteile":     fit_str,
                 "DN (berechn.)": f"DN{dn}" if dn else "—",
             })
         df_edges = pd.DataFrame(edge_rows)
