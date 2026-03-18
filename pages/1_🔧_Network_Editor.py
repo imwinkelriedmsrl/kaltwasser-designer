@@ -1,302 +1,415 @@
 """
 Netzwerk-Editor — Seite 1
-Graphisches Zeichnen des Kaltwasser-Rohrnetzes.
+Automatisches Layout + Drag-and-Drop mit streamlit-agraph.
 """
 
 import streamlit as st
-import plotly.graph_objects as go
 import json
-import math
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 
-from utils.helpers import init_session_state, make_node_id, make_edge_id, network_to_json, network_from_json
+from streamlit_agraph import agraph, Node, Edge, Config
+
+from utils.helpers import (
+    init_session_state,
+    make_node_id,
+    make_edge_id,
+    network_to_json,
+    network_from_json,
+)
 from data.component_library import NODE_TYPES, CHILLERS, FAN_COILS, get_chiller, get_fan_coil
 
 # ---------------------------------------------------------------------------
-st.set_page_config(page_title="Netzwerk-Editor | Kaltwasser Designer", layout="wide", page_icon="🔧")
+st.set_page_config(
+    page_title="Netzwerk-Editor | Kaltwasser Designer",
+    layout="wide",
+    page_icon="🔧",
+)
 init_session_state(st)
 
-# Custom CSS
 st.markdown("""
 <style>
-.node-panel { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; padding: 12px; margin-bottom: 8px; }
-.edge-panel { background: #fff8e1; border: 1px solid #ffe082; border-radius: 8px; padding: 12px; margin-bottom: 8px; }
-.section-header { font-size: 1rem; font-weight: 700; color: #1565C0; border-bottom: 2px solid #1565C0; padding-bottom: 4px; margin-bottom: 12px; }
+.section-header {
+    font-size: 1rem; font-weight: 700; color: #1565C0;
+    border-bottom: 2px solid #1565C0; padding-bottom: 4px; margin-bottom: 12px;
+}
+.node-summary {
+    background: #f0f4f8; border: 1px solid #c8d6e8; border-radius: 6px;
+    padding: 8px 12px; margin-bottom: 6px; font-size: 0.88rem;
+}
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown("# 🔧 Netzwerk-Editor")
-st.markdown("Kaltwasser-Rohrnetz zeichnen: Geräte hinzufügen und mit Rohrsegmenten verbinden.")
+st.markdown(
+    "Geräte hinzufügen und mit Rohrsegmenten verbinden. "
+    "Das Netzwerk wird automatisch layoutet — Knoten können per Drag-and-Drop verschoben werden."
+)
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helper: label for a node
 # ---------------------------------------------------------------------------
 
-NODE_COLORS = {
-    "CHILLER":               "#1565C0",
-    "FAN_COIL":              "#2E7D32",
-    "T_JUNCTION":            "#F57F17",
-    "PUMP":                  "#6A1B9A",
-    "DISTRIBUTION_MANIFOLD": "#AD1457",
-    "AIR_VENT":              "#00838F",
-    "FILL_DRAIN":            "#558B2F",
-}
-
-NODE_SYMBOLS = {
-    "CHILLER":               "square",
-    "FAN_COIL":              "circle",
-    "T_JUNCTION":            "diamond",
-    "PUMP":                  "triangle-up",
-    "DISTRIBUTION_MANIFOLD": "star",
-    "AIR_VENT":              "x",
-    "FILL_DRAIN":            "cross",
-}
-
-
-def get_node_label(node: Dict) -> str:
-    label = node.get("label", node["id"])
+def node_display_label(node: Dict) -> str:
+    lbl = node.get("label", node["id"])
     ntype = node.get("type", "")
+    props = node.get("props", {})
     if ntype == "FAN_COIL":
-        room = node.get("room", "")
-        v = node.get("voltage", 10)
-        label = f"{label}<br>({room}) {v}V"
-    return label
+        room = props.get("room", node.get("room", ""))
+        if room:
+            return f"{lbl}\n{room}"
+    return lbl
 
 
-def build_plotly_figure(nodes: List[Dict], edges: List[Dict]) -> go.Figure:
-    """Build an interactive Plotly network figure."""
-    fig = go.Figure()
+def node_id_label(node: Dict) -> str:
+    return f"{node.get('label', node['id'])} [{node['id'][:6]}]"
 
-    if not nodes:
-        fig.add_annotation(
-            text="Noch keine Knoten vorhanden.<br>Geräte links hinzufügen →",
-            xref="paper", yref="paper", x=0.5, y=0.5,
-            showarrow=False, font=dict(size=16, color="#888"),
+
+# ---------------------------------------------------------------------------
+# Build agraph nodes + edges from session state
+# ---------------------------------------------------------------------------
+
+def build_agraph(nodes: List[Dict], edges: List[Dict]):
+    ag_nodes = []
+    ag_edges = []
+
+    for n in nodes:
+        ntype = n.get("type", "FAN_COIL")
+        color = NODE_TYPES.get(ntype, {}).get("color", "#888888")
+        label = node_display_label(n)
+        ag_nodes.append(
+            Node(
+                id=n["id"],
+                label=label,
+                size=25,
+                color=color,
+                font={"size": 11, "color": "#1a2332"},
+            )
         )
-        fig.update_layout(
-            xaxis=dict(visible=False), yaxis=dict(visible=False),
-            plot_bgcolor="#f9fafb", paper_bgcolor="#f9fafb",
-            height=500,
+
+    for e in edges:
+        props = e.get("props", {})
+        dn = props.get("dn_sized", None)
+        length_m = e.get("length_m", props.get("length_m", 0.0))
+        if dn:
+            edge_label = f"DN{dn} / {length_m:.1f}m"
+        else:
+            edge_label = f"{length_m:.1f}m"
+        ag_edges.append(
+            Edge(
+                source=e["source"],
+                target=e["target"],
+                label=edge_label,
+                color="#5c8dc8",
+                width=2,
+            )
         )
-        return fig
 
-    node_map = {n["id"]: n for n in nodes}
+    return ag_nodes, ag_edges
 
-    # Draw edges first
-    for edge in edges:
-        src = node_map.get(edge["source"])
-        tgt = node_map.get(edge["target"])
-        if not src or not tgt:
-            continue
-        x0, y0 = src.get("x", 0), src.get("y", 0)
-        x1, y1 = tgt.get("x", 0), tgt.get("y", 0)
-        length_m = edge.get("length_m", 0.0)
 
-        # Edge line
-        fig.add_trace(go.Scatter(
-            x=[x0, x1, None], y=[y0, y1, None],
-            mode="lines",
-            line=dict(width=3, color="#5c8dc8"),
-            hoverinfo="skip",
-            showlegend=False,
-        ))
-        # Edge label (midpoint)
-        mx, my = (x0 + x1) / 2, (y0 + y1) / 2
-        edge_id_short = edge.get("id", "")[:6]
-        fig.add_trace(go.Scatter(
-            x=[mx], y=[my],
-            mode="text",
-            text=[f"  {length_m:.1f}m"],
-            textfont=dict(size=11, color="#1565C0"),
-            hovertemplate=(
-                f"<b>Segment {edge_id_short}</b><br>"
-                f"Länge: {length_m:.2f} m<br>"
-                f"Von: {edge.get('source','')}<br>"
-                f"Nach: {edge.get('target','')}<extra></extra>"
-            ),
-            showlegend=False,
-        ))
+# ---------------------------------------------------------------------------
+# agraph Config
+# ---------------------------------------------------------------------------
 
-    # Draw nodes (grouped by type for legend)
-    for ntype, type_info in NODE_TYPES.items():
-        type_nodes = [n for n in nodes if n.get("type") == ntype]
-        if not type_nodes:
-            continue
+AGRAPH_CONFIG = Config(
+    width=900,
+    height=600,
+    directed=True,
+    physics=True,
+    hierarchical=False,
+    nodeHighlightBehavior=True,
+    highlightColor="#F7A7A6",
+    collapsible=False,
+    node={"labelProperty": "label", "renderLabel": True},
+    link={"labelProperty": "label", "renderLabel": True},
+)
 
-        xs = [n.get("x", 0) for n in type_nodes]
-        ys = [n.get("y", 0) for n in type_nodes]
-        labels = [n.get("label", n["id"]) for n in type_nodes]
-        hover_texts = []
-        for n in type_nodes:
-            ht = f"<b>{n.get('label', n['id'])}</b><br>Typ: {type_info['label']}"
-            if ntype == "FAN_COIL":
-                ht += f"<br>Raum: {n.get('room','—')}<br>Spannung: {n.get('voltage',10)}V"
-            elif ntype == "CHILLER":
-                ht += f"<br>Modell: {n.get('model','—')}"
-            ht += "<extra></extra>"
-            hover_texts.append(ht)
+# ---------------------------------------------------------------------------
+# Generic form helpers
+# ---------------------------------------------------------------------------
 
-        fig.add_trace(go.Scatter(
-            x=xs, y=ys,
-            mode="markers+text",
-            marker=dict(
-                size=22,
-                color=NODE_COLORS.get(ntype, "#888"),
-                symbol=NODE_SYMBOLS.get(ntype, "circle"),
-                line=dict(width=2, color="white"),
-            ),
-            text=labels,
-            textposition="top center",
-            textfont=dict(size=10),
-            hovertemplate=hover_texts,
-            name=type_info["label"],
-        ))
+def _chiller_library_form(prefix: str) -> Dict:
+    """Render library chiller selector. Returns extra props dict."""
+    lib_keys = list(CHILLERS.keys())
+    # Merge with custom chillers from session state
+    custom_ch = st.session_state.get("custom_chillers", [])
+    all_keys = lib_keys + [f"__custom__{c['_key']}" for c in custom_ch]
 
-    fig.update_layout(
-        showlegend=True,
-        legend=dict(
-            orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0,
-            bgcolor="rgba(255,255,255,0.8)", bordercolor="#ddd", borderwidth=1,
-        ),
-        plot_bgcolor="#f0f4f8",
-        paper_bgcolor="#ffffff",
-        xaxis=dict(
-            title="X [m]",
-            showgrid=True, gridcolor="#dde",
-            zeroline=True, zerolinecolor="#aab",
-        ),
-        yaxis=dict(
-            title="Y [m]",
-            showgrid=True, gridcolor="#dde",
-            zeroline=True, zerolinecolor="#aab",
-            scaleanchor="x",
-        ),
-        height=560,
-        margin=dict(l=20, r=20, t=40, b=20),
-        dragmode="pan",
+    def fmt_key(k):
+        if k.startswith("__custom__"):
+            key = k.replace("__custom__", "")
+            match = next((c for c in custom_ch if c["_key"] == key), None)
+            return f"[Benutzerdef.] {match['model'] if match else key}"
+        return f"{CHILLERS[k]['manufacturer']} {CHILLERS[k]['model']}"
+
+    sel = st.selectbox("Modell", options=all_keys, format_func=fmt_key, key=f"{prefix}_lib_sel")
+
+    if sel.startswith("__custom__"):
+        key = sel.replace("__custom__", "")
+        ch_data = next((c for c in custom_ch if c["_key"] == key), {})
+        st.info(
+            f"**{ch_data.get('model','—')}** — {ch_data.get('cooling_capacity_kW','?')} kW, "
+            f"Pumpendruckhöhe {ch_data.get('pump_head_kPa','?')} kPa"
+        )
+        return {"model": "custom", **ch_data}
+    else:
+        ch = get_chiller(sel)
+        st.info(
+            f"**{ch['model']}** — {ch['cooling_capacity_kW']} kW Kälteleistung, "
+            f"EER {ch['eer']}, Pumpe: {ch.get('pump_head_kPa', '?')} kPa"
+        )
+        return {"model": sel, "pump_head_kPa": ch["pump_head_kPa"]}
+
+
+def _chiller_pump_fields(prefix: str, defaults: Dict) -> Dict:
+    """Render pump fields for a chiller. Returns pump props dict."""
+    st.markdown("**Pumpe**")
+    pump_integrated = st.checkbox(
+        "Pumpe integriert",
+        value=bool(defaults.get("pump_integrated", True)),
+        key=f"{prefix}_pump_int",
     )
-    return fig
+    pump_head = st.number_input(
+        "Pumpenförderhöhe [kPa]",
+        value=float(defaults.get("pump_head_kPa", 96.8)),
+        min_value=0.0, max_value=500.0, step=1.0,
+        key=f"{prefix}_pump_head",
+    )
+    pump_flow = st.number_input(
+        "Pumpenvolumenstrom max. [m³/h]",
+        value=float(defaults.get("pump_flow_max_m3h", 5.5)),
+        min_value=0.0, max_value=50.0, step=0.1,
+        key=f"{prefix}_pump_flow",
+    )
+    pump_type = st.text_input(
+        "Pumpentyp",
+        value=str(defaults.get("pump_type", "Hocheffizienzpumpe EC")),
+        key=f"{prefix}_pump_type",
+    )
+    return {
+        "pump_integrated":    pump_integrated,
+        "pump_head_kPa":      pump_head,
+        "pump_flow_max_m3h":  pump_flow,
+        "pump_type":          pump_type,
+    }
+
+
+def _chiller_custom_form(prefix: str) -> Dict:
+    """Render custom chiller entry form. Returns props dict."""
+    st.markdown("**Benutzerdefiniertes Aussengerät**")
+    hersteller   = st.text_input("Hersteller", value="", key=f"{prefix}_hersteller")
+    modell       = st.text_input("Modell", value="", key=f"{prefix}_modell")
+    kaelteleist  = st.number_input("Kälteleistung [kW]", value=10.0, min_value=0.1, step=0.5, key=f"{prefix}_kaelteleist")
+    leistaufn    = st.number_input("Leistungsaufnahme [kW]", value=3.0, min_value=0.0, step=0.1, key=f"{prefix}_leistaufn")
+    eer          = st.number_input("EER", value=3.0, min_value=0.0, step=0.1, key=f"{prefix}_eer")
+    t_sup        = st.number_input("Vorlauftemperatur [°C]", value=7.0, step=0.5, key=f"{prefix}_tsup")
+    t_ret        = st.number_input("Rücklauftemperatur [°C]", value=12.0, step=0.5, key=f"{prefix}_tret")
+    vol_m3h      = st.number_input("Volumenstrom [m³/h]", value=2.0, min_value=0.0, step=0.1, key=f"{prefix}_vol")
+    dp_evap      = st.number_input("Druckverlust Verdampfer [kPa]", value=20.0, min_value=0.0, step=1.0, key=f"{prefix}_dpevap")
+    pump_head_c  = st.number_input("Pumpenförderhöhe [kPa]", value=80.0, min_value=0.0, step=1.0, key=f"{prefix}_pumpheadc")
+    kaeltemittel = st.text_input("Kältemittel", value="R32", key=f"{prefix}_kaeltemittel")
+    gwp          = st.number_input("GWP Wert", value=675, min_value=0, step=1, key=f"{prefix}_gwp")
+    anschluss    = st.text_input("Anschluss", value='1"', key=f"{prefix}_anschluss")
+    schall       = st.number_input("Schallleistung [dB(A)]", value=70.0, min_value=0.0, step=1.0, key=f"{prefix}_schall")
+    notizen      = st.text_area("Notizen", value="", key=f"{prefix}_notizen")
+
+    import uuid
+    _key = uuid.uuid4().hex[:8]
+    return {
+        "model":                 "custom",
+        "_key":                  _key,
+        "manufacturer":          hersteller,
+        "model_name":            modell,
+        "cooling_capacity_kW":   kaelteleist,
+        "power_input_kW":        leistaufn,
+        "eer":                   eer,
+        "t_supply_C":            t_sup,
+        "t_return_C":            t_ret,
+        "flow_rate_m3h":         vol_m3h,
+        "dp_evaporator_kPa":     dp_evap,
+        "pump_head_kPa":         pump_head_c,
+        "refrigerant":           kaeltemittel,
+        "gwp":                   gwp,
+        "connection_supply":     anschluss,
+        "sound_power_dBa":       schall,
+        "notes":                 notizen,
+    }
+
+
+def _fc_library_form(prefix: str) -> Dict:
+    """Render library fan coil selector. Returns extra props dict."""
+    lib_keys = list(FAN_COILS.keys())
+    custom_fc = st.session_state.get("custom_fan_coils", [])
+    all_keys = lib_keys + [f"__custom__{c['_key']}" for c in custom_fc]
+
+    def fmt_key(k):
+        if k.startswith("__custom__"):
+            key = k.replace("__custom__", "")
+            match = next((c for c in custom_fc if c["_key"] == key), None)
+            return f"[Benutzerdef.] {match.get('model_name','?') if match else key}"
+        return f"{FAN_COILS[k]['manufacturer']} {FAN_COILS[k]['model']}"
+
+    sel = st.selectbox("Modell", options=all_keys, format_func=fmt_key, key=f"{prefix}_lib_sel")
+
+    if sel.startswith("__custom__"):
+        key = sel.replace("__custom__", "")
+        fc_data = next((c for c in custom_fc if c["_key"] == key), {})
+        st.info(
+            f"**{fc_data.get('model_name','—')}** — "
+            f"{fc_data.get('cooling_W','?')} W, {fc_data.get('flow_lh','?')} l/h"
+        )
+        return {"model": "custom", **fc_data}
+    else:
+        fc = get_fan_coil(sel)
+        perf10 = fc["performance"][10]
+        st.info(
+            f"**{fc['model']}** bei 10V — {perf10['cooling_total_W']} W, "
+            f"{perf10['airflow_m3h']} m³/h, {fc['water_flow_lh']} l/h, "
+            f"{fc['water_resistance_kPa']} kPa"
+        )
+        return {
+            "model":       sel,
+            "cooling_W":   perf10["cooling_total_W"],
+            "flow_lh":     fc["water_flow_lh"],
+            "dp_kPa":      fc["water_resistance_kPa"],
+            "connection":  fc.get("connection_supply", '½"'),
+        }
+
+
+def _fc_custom_form(prefix: str) -> Dict:
+    """Render custom fan coil entry form. Returns props dict."""
+    st.markdown("**Benutzerdefinierter Gebläsekonvektor**")
+    hersteller  = st.text_input("Hersteller", value="", key=f"{prefix}_fc_hersteller")
+    modell      = st.text_input("Modell", value="", key=f"{prefix}_fc_modell")
+    kuehllst    = st.number_input("Kühlleistung [W] (Auslegungspunkt)", value=2000, min_value=1, step=50, key=f"{prefix}_fc_kuehl")
+    vol_lh      = st.number_input("Volumenstrom [l/h]", value=300, min_value=1, step=10, key=f"{prefix}_fc_vol")
+    dp_kpa      = st.number_input("Druckverlust [kPa]", value=20.0, min_value=0.0, step=0.5, key=f"{prefix}_fc_dp")
+    anschluss   = st.text_input("Anschluss", value='½"', key=f"{prefix}_fc_anschluss")
+    schall      = st.number_input("Schallleistung [dB(A)]", value=35.0, min_value=0.0, step=1.0, key=f"{prefix}_fc_schall")
+    notizen     = st.text_area("Notizen", value="", key=f"{prefix}_fc_notizen")
+
+    import uuid
+    _key = uuid.uuid4().hex[:8]
+    return {
+        "model":        "custom",
+        "_key":         _key,
+        "manufacturer": hersteller,
+        "model_name":   modell,
+        "cooling_W":    kuehllst,
+        "flow_lh":      vol_lh,
+        "dp_kPa":       dp_kpa,
+        "connection":   anschluss,
+        "sound_dBa":    schall,
+        "notes":        notizen,
+    }
 
 
 # ---------------------------------------------------------------------------
-# Layout: sidebar panel (left) + main canvas (right)
+# Layout: left sidebar panel + right agraph canvas
 # ---------------------------------------------------------------------------
-panel_col, canvas_col = st.columns([1, 2])
 
-# ── LEFT PANEL ──────────────────────────────────────────────────────────────
+panel_col, canvas_col = st.columns([3, 7])
+
+# ── LEFT PANEL ───────────────────────────────────────────────────────────────
 with panel_col:
-    tab_nodes, tab_edges, tab_io = st.tabs(["Knoten", "Verbindungen", "Import/Export"])
+    mode = st.radio(
+        "Modus",
+        options=["Knoten hinzufügen", "Verbindungen", "Bearbeiten", "Löschen", "Import/Export"],
+        horizontal=False,
+        key="editor_mode",
+    )
+    st.markdown("---")
 
-    # ---- TAB: Knoten ----
-    with tab_nodes:
+    # -------------------------------------------------------------------------
+    if mode == "Knoten hinzufügen":
         st.markdown('<div class="section-header">Knoten hinzufügen</div>', unsafe_allow_html=True)
 
         node_type = st.selectbox(
             "Gerätetyp",
             options=list(NODE_TYPES.keys()),
             format_func=lambda k: NODE_TYPES[k]["label"],
-            key="new_node_type",
+            key="add_node_type",
         )
 
-        node_label = st.text_input("Bezeichnung", value=f"Neues {NODE_TYPES[node_type]['label']}", key="new_node_label")
+        node_label = st.text_input(
+            "Bezeichnung",
+            value=f"{NODE_TYPES[node_type]['label'][:4]}-{len(st.session_state.nodes)+1:02d}",
+            key="add_node_label",
+        )
 
-        col_x, col_y = st.columns(2)
-        with col_x:
-            node_x = st.number_input("X-Position [m]", value=0.0, step=1.0, key="new_node_x")
-        with col_y:
-            node_y = st.number_input("Y-Position [m]", value=0.0, step=1.0, key="new_node_y")
+        extra_props: Dict = {}
 
-        # Type-specific fields
-        extra_fields = {}
+        # --- CHILLER form ---
         if node_type == "CHILLER":
-            model_key = st.selectbox(
-                "Modell",
-                options=list(CHILLERS.keys()),
-                format_func=lambda k: CHILLERS[k]["model"],
-                key="new_chiller_model",
+            st.markdown("**Aussengerät konfigurieren**")
+            ch_source = st.radio(
+                "Quelle",
+                options=["Aus Bibliothek", "Benutzerdefiniert"],
+                horizontal=True,
+                key="add_ch_source",
             )
-            extra_fields["model"] = model_key
-            ch = get_chiller(model_key)
-            st.info(
-                f"**{ch['model']}** — {ch['cooling_capacity_kW']} kW Kälteleistung, "
-                f"EER {ch['eer']}, Pumpendruckhöhe {ch['pump_head_kPa']} kPa"
-            )
+            if ch_source == "Aus Bibliothek":
+                lib_props = _chiller_library_form("add_ch")
+                pump_defaults = {
+                    "pump_integrated":   True,
+                    "pump_head_kPa":     lib_props.get("pump_head_kPa", 96.8),
+                    "pump_flow_max_m3h": 5.5,
+                    "pump_type":         "Hocheffizienzpumpe EC",
+                }
+                pump_props = _chiller_pump_fields("add_ch", pump_defaults)
+                extra_props = {**lib_props, **pump_props}
+            else:
+                custom_props = _chiller_custom_form("add_ch")
+                pump_props = _chiller_pump_fields("add_ch_cust", {
+                    "pump_head_kPa": custom_props.get("pump_head_kPa", 80.0),
+                })
+                extra_props = {**custom_props, **pump_props}
 
+        # --- FAN_COIL form ---
         elif node_type == "FAN_COIL":
-            fc_model_key = st.selectbox(
-                "Modell",
-                options=list(FAN_COILS.keys()),
-                format_func=lambda k: FAN_COILS[k]["model"],
-                key="new_fc_model",
+            st.markdown("**Innengerät konfigurieren**")
+            fc_source = st.radio(
+                "Quelle",
+                options=["Aus Bibliothek", "Benutzerdefiniert"],
+                horizontal=True,
+                key="add_fc_source",
             )
-            extra_fields["model"] = fc_model_key
-            room = st.text_input("Raumbezeichnung", value="Raum 1", key="new_fc_room")
-            voltage = st.selectbox("Betriebsspannung [V]", options=[10, 8, 6, 4, 2], index=0, key="new_fc_voltage")
-            extra_fields["room"] = room
-            extra_fields["voltage"] = voltage
-            fc = get_fan_coil(fc_model_key)
-            perf = fc["performance"][voltage]
-            st.info(
-                f"**{fc['model']}** bei {voltage}V — {perf['cooling_total_W']} W Kühlleistung, "
-                f"{perf['airflow_m3h']} m³/h Luftvolumen"
-            )
+            if fc_source == "Aus Bibliothek":
+                extra_props = _fc_library_form("add_fc")
+            else:
+                extra_props = _fc_custom_form("add_fc")
 
-        if st.button("➕ Knoten hinzufügen", use_container_width=True, type="primary"):
+            room = st.text_input("Raumbez.", value="", key="add_fc_room")
+            extra_props["room"] = room
+
+        if st.button("Knoten hinzufügen", use_container_width=True, type="primary", key="btn_add_node"):
             new_node = {
                 "id":    make_node_id(),
                 "type":  node_type,
                 "label": node_label,
-                "x":     float(node_x),
-                "y":     float(node_y),
-                **extra_fields,
+                "props": extra_props,
             }
+            # Save custom items to session state for reuse
+            if node_type == "CHILLER" and extra_props.get("model") == "custom":
+                key_val = extra_props.get("_key", "")
+                if key_val and not any(c.get("_key") == key_val for c in st.session_state.custom_chillers):
+                    st.session_state.custom_chillers.append(extra_props)
+            if node_type == "FAN_COIL" and extra_props.get("model") == "custom":
+                key_val = extra_props.get("_key", "")
+                if key_val and not any(c.get("_key") == key_val for c in st.session_state.custom_fan_coils):
+                    st.session_state.custom_fan_coils.append(extra_props)
+
             st.session_state.nodes.append(new_node)
             st.session_state.calc_results = None
             st.success(f"Knoten '{node_label}' hinzugefügt.")
             st.rerun()
 
-        st.markdown("---")
-        st.markdown('<div class="section-header">Vorhandene Knoten</div>', unsafe_allow_html=True)
-
-        if not st.session_state.nodes:
-            st.info("Noch keine Knoten vorhanden.")
-        else:
-            for i, node in enumerate(list(st.session_state.nodes)):
-                with st.expander(
-                    f"{NODE_TYPES.get(node['type'], {}).get('label','?')} — {node['label']} [{node['id'][:8]}]",
-                    expanded=False,
-                ):
-                    c1, c2 = st.columns(2)
-                    new_label = c1.text_input("Bezeichnung", value=node.get("label", ""), key=f"lbl_{node['id']}")
-                    new_x = c1.number_input("X [m]", value=float(node.get("x", 0)), step=1.0, key=f"x_{node['id']}")
-                    new_y = c2.number_input("Y [m]", value=float(node.get("y", 0)), step=1.0, key=f"y_{node['id']}")
-
-                    if node.get("type") == "FAN_COIL":
-                        new_room = c1.text_input("Raum", value=node.get("room", ""), key=f"rm_{node['id']}")
-                        new_v = c2.selectbox("Spannung [V]", options=[10,8,6,4,2],
-                                             index=[10,8,6,4,2].index(int(node.get("voltage",10))),
-                                             key=f"v_{node['id']}")
-                        st.session_state.nodes[i]["room"] = new_room
-                        st.session_state.nodes[i]["voltage"] = new_v
-
-                    st.session_state.nodes[i]["label"] = new_label
-                    st.session_state.nodes[i]["x"] = new_x
-                    st.session_state.nodes[i]["y"] = new_y
-
-                    if st.button("🗑️ Löschen", key=f"del_node_{node['id']}", type="secondary"):
-                        # Remove node and all connected edges
-                        st.session_state.nodes = [n for n in st.session_state.nodes if n["id"] != node["id"]]
-                        st.session_state.edges = [e for e in st.session_state.edges
-                                                   if e["source"] != node["id"] and e["target"] != node["id"]]
-                        st.session_state.calc_results = None
-                        st.rerun()
-
-    # ---- TAB: Verbindungen ----
-    with tab_edges:
+    # -------------------------------------------------------------------------
+    elif mode == "Verbindungen":
         st.markdown('<div class="section-header">Rohrsegment verbinden</div>', unsafe_allow_html=True)
 
         node_ids = [n["id"] for n in st.session_state.nodes]
-        node_labels_map = {n["id"]: f"{n.get('label','?')} [{n['id'][:6]}]" for n in st.session_state.nodes}
+        node_labels_map = {n["id"]: node_id_label(n) for n in st.session_state.nodes}
 
         if len(node_ids) < 2:
             st.info("Mindestens 2 Knoten erforderlich.")
@@ -307,89 +420,200 @@ with panel_col:
                 format_func=lambda k: node_labels_map.get(k, k),
                 key="edge_src",
             )
+            tgt_options = [n for n in node_ids if n != src_id]
             tgt_id = st.selectbox(
                 "Nach (Ziel)",
-                options=[n for n in node_ids if n != src_id],
+                options=tgt_options,
                 format_func=lambda k: node_labels_map.get(k, k),
                 key="edge_tgt",
             )
-            length_m = st.number_input("Rohrlänge [m]", value=5.0, min_value=0.1, step=0.5, key="edge_len")
+            length_m = st.number_input(
+                "Rohrlänge [m]", value=5.0, min_value=0.1, step=0.5, key="edge_len"
+            )
 
             st.markdown("**Formteile (Anzahl)**")
-            f_col1, f_col2 = st.columns(2)
-            with f_col1:
-                n_elbow  = st.number_input("Bögen 90°", value=0, min_value=0, step=1, key="f_elbow")
-                n_t_thr  = st.number_input("T-Stück Durchgang", value=0, min_value=0, step=1, key="f_t_thr")
-                n_coupl  = st.number_input("Kupplungen", value=0, min_value=0, step=1, key="f_coupl")
-            with f_col2:
-                n_t_br   = st.number_input("T-Stück Abzweig", value=0, min_value=0, step=1, key="f_t_br")
-                n_iso    = st.number_input("Absperrventile", value=0, min_value=0, step=1, key="f_iso")
-                n_bal    = st.number_input("Regulierventile", value=0, min_value=0, step=1, key="f_bal")
+            fc1, fc2 = st.columns(2)
+            with fc1:
+                n_elbow = st.number_input("Bögen 90°",           value=0, min_value=0, step=1, key="f_elbow")
+                n_t_thr = st.number_input("T-Stück Durchgang",   value=0, min_value=0, step=1, key="f_t_thr")
+                n_coupl = st.number_input("Kupplungen",           value=0, min_value=0, step=1, key="f_coupl")
+            with fc2:
+                n_t_br  = st.number_input("T-Stück Abzweig",     value=0, min_value=0, step=1, key="f_t_br")
+                n_iso   = st.number_input("Absperrventile",       value=0, min_value=0, step=1, key="f_iso")
+                n_bal   = st.number_input("Regulierventile",      value=0, min_value=0, step=1, key="f_bal")
 
-            fittings = {}
-            if n_elbow > 0: fittings["elbow_90"]         = int(n_elbow)
-            if n_t_thr > 0: fittings["t_through"]        = int(n_t_thr)
-            if n_t_br  > 0: fittings["t_branch"]         = int(n_t_br)
-            if n_coupl > 0: fittings["coupling"]          = int(n_coupl)
-            if n_iso   > 0: fittings["valve_isolation"]   = int(n_iso)
-            if n_bal   > 0: fittings["valve_balancing"]   = int(n_bal)
+            fittings_raw = {}
+            if n_elbow > 0: fittings_raw["elbow_90"]       = int(n_elbow)
+            if n_t_thr > 0: fittings_raw["t_through"]      = int(n_t_thr)
+            if n_t_br  > 0: fittings_raw["t_branch"]       = int(n_t_br)
+            if n_coupl > 0: fittings_raw["coupling"]        = int(n_coupl)
+            if n_iso   > 0: fittings_raw["valve_isolation"] = int(n_iso)
+            if n_bal   > 0: fittings_raw["valve_balancing"] = int(n_bal)
 
-            edge_label = st.text_input("Bezeichnung (optional)", value="", key="edge_lbl")
+            edge_notes = st.text_input("Notizen (optional)", value="", key="edge_notes")
 
-            if st.button("➕ Rohrsegment hinzufügen", use_container_width=True, type="primary"):
+            if st.button("Rohrsegment hinzufügen", use_container_width=True, type="primary", key="btn_add_edge"):
                 new_edge = {
                     "id":       make_edge_id(),
                     "source":   src_id,
                     "target":   tgt_id,
                     "length_m": float(length_m),
-                    "fittings": fittings,
-                    "label":    edge_label,
+                    "fittings": fittings_raw,
+                    "props": {
+                        "length_m":    float(length_m),
+                        "fittings_raw": fittings_raw,
+                        "notes":       edge_notes,
+                        "dn_sized":    None,
+                        "dp_Pa":       None,
+                        "flow_lh":     None,
+                    },
                 }
                 st.session_state.edges.append(new_edge)
                 st.session_state.calc_results = None
-                st.success(f"Rohrsegment hinzugefügt ({length_m:.1f} m).")
+                st.success(f"Rohrsegment {length_m:.1f} m hinzugefügt.")
                 st.rerun()
 
+        # List existing edges
         st.markdown("---")
         st.markdown('<div class="section-header">Vorhandene Rohrsegmente</div>', unsafe_allow_html=True)
-
+        node_map_label = {n["id"]: n.get("label", n["id"]) for n in st.session_state.nodes}
         if not st.session_state.edges:
-            st.info("Noch keine Verbindungen vorhanden.")
+            st.info("Noch keine Verbindungen.")
         else:
             for i, edge in enumerate(list(st.session_state.edges)):
-                src_lbl = node_labels_map.get(edge.get("source", ""), edge.get("source", ""))
-                tgt_lbl = node_labels_map.get(edge.get("target", ""), edge.get("target", ""))
+                src_lbl = node_map_label.get(edge.get("source", ""), edge.get("source", ""))
+                tgt_lbl = node_map_label.get(edge.get("target", ""), edge.get("target", ""))
                 with st.expander(
-                    f"📏 {src_lbl} → {tgt_lbl} — {edge.get('length_m', 0):.1f} m  [{edge['id'][:8]}]",
+                    f"{src_lbl} → {tgt_lbl}  {edge.get('length_m', 0):.1f} m  [{edge['id'][:8]}]",
                     expanded=False,
                 ):
                     new_len = st.number_input(
-                        "Länge [m]", value=float(edge.get("length_m", 1.0)),
-                        min_value=0.1, step=0.5, key=f"elen_{edge['id']}"
+                        "Länge [m]",
+                        value=float(edge.get("length_m", 1.0)),
+                        min_value=0.1, step=0.5,
+                        key=f"elen_{edge['id']}",
                     )
                     st.session_state.edges[i]["length_m"] = new_len
-
+                    if "props" in st.session_state.edges[i]:
+                        st.session_state.edges[i]["props"]["length_m"] = new_len
                     fit = edge.get("fittings", {})
                     st.caption(f"Formteile: {fit if fit else 'keine'}")
 
-                    if st.button("🗑️ Löschen", key=f"del_edge_{edge['id']}", type="secondary"):
-                        st.session_state.edges = [e for e in st.session_state.edges if e["id"] != edge["id"]]
-                        st.session_state.calc_results = None
-                        st.rerun()
+    # -------------------------------------------------------------------------
+    elif mode == "Bearbeiten":
+        st.markdown('<div class="section-header">Knoten bearbeiten</div>', unsafe_allow_html=True)
 
-    # ---- TAB: Import/Export ----
-    with tab_io:
+        if not st.session_state.nodes:
+            st.info("Keine Knoten vorhanden.")
+        else:
+            node_ids = [n["id"] for n in st.session_state.nodes]
+            node_labels_map = {n["id"]: node_id_label(n) for n in st.session_state.nodes}
+
+            sel_id = st.selectbox(
+                "Knoten auswählen",
+                options=node_ids,
+                format_func=lambda k: node_labels_map.get(k, k),
+                key="edit_node_sel",
+            )
+            idx = next((i for i, n in enumerate(st.session_state.nodes) if n["id"] == sel_id), None)
+            if idx is not None:
+                node = st.session_state.nodes[idx]
+                new_label = st.text_input("Bezeichnung", value=node.get("label", ""), key=f"edit_lbl_{sel_id}")
+
+                props = node.get("props", {})
+                ntype = node.get("type", "")
+
+                if ntype == "FAN_COIL":
+                    new_room = st.text_input("Raumbez.", value=props.get("room", ""), key=f"edit_room_{sel_id}")
+                    props["room"] = new_room
+
+                if ntype == "CHILLER":
+                    new_pump_head = st.number_input(
+                        "Pumpenförderhöhe [kPa]",
+                        value=float(props.get("pump_head_kPa", 96.8)),
+                        min_value=0.0, max_value=500.0, step=1.0,
+                        key=f"edit_pumphead_{sel_id}",
+                    )
+                    props["pump_head_kPa"] = new_pump_head
+
+                if st.button("Änderungen speichern", type="primary", key=f"save_edit_{sel_id}"):
+                    st.session_state.nodes[idx]["label"] = new_label
+                    st.session_state.nodes[idx]["props"] = props
+                    st.session_state.calc_results = None
+                    st.success("Gespeichert.")
+                    st.rerun()
+
+    # -------------------------------------------------------------------------
+    elif mode == "Löschen":
+        st.markdown('<div class="section-header">Knoten / Segment löschen</div>', unsafe_allow_html=True)
+
+        st.markdown("**Knoten löschen**")
+        if not st.session_state.nodes:
+            st.info("Keine Knoten.")
+        else:
+            node_ids = [n["id"] for n in st.session_state.nodes]
+            node_labels_map = {n["id"]: node_id_label(n) for n in st.session_state.nodes}
+            del_node_id = st.selectbox(
+                "Knoten auswählen",
+                options=node_ids,
+                format_func=lambda k: node_labels_map.get(k, k),
+                key="del_node_sel",
+            )
+            if st.button("Knoten löschen", type="secondary", key="btn_del_node"):
+                st.session_state.nodes = [n for n in st.session_state.nodes if n["id"] != del_node_id]
+                st.session_state.edges = [
+                    e for e in st.session_state.edges
+                    if e["source"] != del_node_id and e["target"] != del_node_id
+                ]
+                st.session_state.calc_results = None
+                st.success("Knoten gelöscht.")
+                st.rerun()
+
+        st.markdown("---")
+        st.markdown("**Rohrsegment löschen**")
+        if not st.session_state.edges:
+            st.info("Keine Rohrsegmente.")
+        else:
+            node_map_label = {n["id"]: n.get("label", n["id"]) for n in st.session_state.nodes}
+            edge_ids = [e["id"] for e in st.session_state.edges]
+
+            def fmt_edge(eid):
+                e = next((x for x in st.session_state.edges if x["id"] == eid), {})
+                src = node_map_label.get(e.get("source", ""), e.get("source", ""))
+                tgt = node_map_label.get(e.get("target", ""), e.get("target", ""))
+                return f"{src} → {tgt}  {e.get('length_m', 0):.1f}m  [{eid[:6]}]"
+
+            del_edge_id = st.selectbox(
+                "Segment auswählen",
+                options=edge_ids,
+                format_func=fmt_edge,
+                key="del_edge_sel",
+            )
+            if st.button("Segment löschen", type="secondary", key="btn_del_edge"):
+                st.session_state.edges = [e for e in st.session_state.edges if e["id"] != del_edge_id]
+                st.session_state.calc_results = None
+                st.success("Segment gelöscht.")
+                st.rerun()
+
+        st.markdown("---")
+        if st.button("Gesamtes Netzwerk leeren", type="secondary", key="btn_clear_all"):
+            st.session_state.nodes = []
+            st.session_state.edges = []
+            st.session_state.calc_results = None
+            st.rerun()
+
+    # -------------------------------------------------------------------------
+    elif mode == "Import/Export":
         st.markdown('<div class="section-header">Netzwerk speichern / laden</div>', unsafe_allow_html=True)
 
-        # Export
-        if st.button("📥 Als JSON exportieren", use_container_width=True):
+        if st.button("Als JSON exportieren", use_container_width=True, key="btn_export_json"):
             json_str = network_to_json(
                 st.session_state.nodes,
                 st.session_state.edges,
                 st.session_state.system_params,
             )
             st.download_button(
-                "💾 JSON herunterladen",
+                "JSON herunterladen",
                 data=json_str,
                 file_name=f"{st.session_state.system_params.get('project_name','network')}.json",
                 mime="application/json",
@@ -397,16 +621,15 @@ with panel_col:
             )
 
         st.markdown("---")
-        # Import
-        uploaded = st.file_uploader("📤 JSON importieren", type=["json"], key="net_import")
+        uploaded = st.file_uploader("JSON importieren", type=["json"], key="net_import")
         if uploaded:
             try:
                 json_str = uploaded.read().decode("utf-8")
                 nodes, edges, sp = network_from_json(json_str)
-                st.session_state.nodes  = nodes
-                st.session_state.edges  = edges
+                st.session_state.nodes = nodes
+                st.session_state.edges = edges
                 st.session_state.system_params = sp
-                st.session_state.calc_results  = None
+                st.session_state.calc_results = None
                 st.success(f"Netzwerk geladen: {len(nodes)} Knoten, {len(edges)} Segmente.")
                 st.rerun()
             except Exception as e:
@@ -414,92 +637,153 @@ with panel_col:
 
         st.markdown("---")
         st.markdown('<div class="section-header">Beispielnetzwerk</div>', unsafe_allow_html=True)
-        if st.button("🏗️ Beispielnetzwerk laden", use_container_width=True):
-            # Create a sample network: 1 chiller → manifold → 3 fan coils
-            from utils.helpers import make_node_id, make_edge_id
-            n_ch  = {"id": make_node_id(), "type": "CHILLER",  "label": "Kältemaschine KM-1",
-                      "model": "Climaveneta_iBX2_G07_27Y", "x": 0.0, "y": 0.0}
-            n_man = {"id": make_node_id(), "type": "DISTRIBUTION_MANIFOLD", "label": "Verteiler V-1",
-                      "x": 5.0, "y": 0.0}
-            n_fc1 = {"id": make_node_id(), "type": "FAN_COIL", "label": "GK-1",
-                      "model": "Kampmann_KaCool_W_Size4", "room": "Büro 1.01",
-                      "voltage": 10, "x": 9.0, "y":  3.0}
-            n_fc2 = {"id": make_node_id(), "type": "FAN_COIL", "label": "GK-2",
-                      "model": "Kampmann_KaCool_W_Size4", "room": "Büro 1.02",
-                      "voltage": 8,  "x": 9.0, "y":  0.0}
-            n_fc3 = {"id": make_node_id(), "type": "FAN_COIL", "label": "GK-3",
-                      "model": "Kampmann_KaCool_W_Size4", "room": "Sitzungszimmer",
-                      "voltage": 10, "x": 9.0, "y": -3.0}
+        if st.button("Beispielnetzwerk laden", use_container_width=True, key="btn_load_example"):
+            n_ch = {
+                "id":    make_node_id(),
+                "type":  "CHILLER",
+                "label": "KM-01",
+                "props": {
+                    "model":                "Climaveneta_iBX2_G07_27Y",
+                    "pump_head_kPa":        96.8,
+                    "pump_integrated":      True,
+                    "pump_type":            "Hocheffizienzpumpe EC",
+                    "pump_flow_max_m3h":    5.5,
+                },
+            }
+            n_tj = {
+                "id":    make_node_id(),
+                "type":  "T_JUNCTION",
+                "label": "T-01",
+                "props": {},
+            }
+            n_fc1 = {
+                "id":    make_node_id(),
+                "type":  "FAN_COIL",
+                "label": "GK-01",
+                "props": {
+                    "model":       "Kampmann_KaCool_W_Size4",
+                    "room":        "Büro EG",
+                    "cooling_W":   4040,
+                    "flow_lh":     696,
+                    "dp_kPa":      67.6,
+                    "connection":  '½"',
+                },
+            }
+            n_fc2 = {
+                "id":    make_node_id(),
+                "type":  "FAN_COIL",
+                "label": "GK-02",
+                "props": {
+                    "model":       "Kampmann_KaCool_W_Size2",
+                    "room":        "Büro OG",
+                    "cooling_W":   2290,
+                    "flow_lh":     395,
+                    "dp_kPa":      27.0,
+                    "connection":  '½"',
+                },
+            }
+            n_fc3 = {
+                "id":    make_node_id(),
+                "type":  "FAN_COIL",
+                "label": "GK-03",
+                "props": {
+                    "model":       "Kampmann_KaCool_W_Size3",
+                    "room":        "Sitzungszimmer",
+                    "cooling_W":   3160,
+                    "flow_lh":     545,
+                    "dp_kPa":      47.5,
+                    "connection":  '½"',
+                },
+            }
 
-            e1 = {"id": make_edge_id(), "source": n_ch["id"],  "target": n_man["id"],
-                   "length_m": 5.0, "fittings": {"coupling": 2}, "label": "VL/RL Hauptleitung"}
-            e2 = {"id": make_edge_id(), "source": n_man["id"], "target": n_fc1["id"],
-                   "length_m": 8.0, "fittings": {"elbow_90": 2, "t_branch": 1, "valve_isolation": 2},
-                   "label": "Stichleitung GK-1"}
-            e3 = {"id": make_edge_id(), "source": n_man["id"], "target": n_fc2["id"],
-                   "length_m": 6.0, "fittings": {"elbow_90": 1, "t_through": 1, "valve_isolation": 2},
-                   "label": "Stichleitung GK-2"}
-            e4 = {"id": make_edge_id(), "source": n_man["id"], "target": n_fc3["id"],
-                   "length_m": 9.0, "fittings": {"elbow_90": 2, "t_branch": 1, "valve_isolation": 2},
-                   "label": "Stichleitung GK-3"}
+            def make_edge(src, tgt, length, **fit):
+                return {
+                    "id":       make_edge_id(),
+                    "source":   src["id"],
+                    "target":   tgt["id"],
+                    "length_m": length,
+                    "fittings": fit if fit else {},
+                    "props": {
+                        "length_m":     length,
+                        "fittings_raw": fit if fit else {},
+                        "notes":        "",
+                        "dn_sized":     None,
+                        "dp_Pa":        None,
+                        "flow_lh":      None,
+                    },
+                }
 
-            st.session_state.nodes = [n_ch, n_man, n_fc1, n_fc2, n_fc3]
+            e1 = make_edge(n_ch,  n_tj,  5.0, coupling=2)
+            e2 = make_edge(n_tj,  n_fc1, 8.0, elbow_90=2, t_branch=1, valve_isolation=2)
+            e3 = make_edge(n_tj,  n_fc2, 6.0, elbow_90=1, t_through=1, valve_isolation=2)
+            e4 = make_edge(n_tj,  n_fc3, 9.0, elbow_90=2, t_branch=1, valve_isolation=2)
+
+            st.session_state.nodes = [n_ch, n_tj, n_fc1, n_fc2, n_fc3]
             st.session_state.edges = [e1, e2, e3, e4]
             st.session_state.calc_results = None
-            st.success("Beispielnetzwerk geladen (1 Kältemaschine, 1 Verteiler, 3 Gebläsekonvektoren).")
-            st.rerun()
-
-        if st.button("🗑️ Netzwerk leeren", use_container_width=True, type="secondary"):
-            st.session_state.nodes = []
-            st.session_state.edges = []
-            st.session_state.calc_results = None
+            st.success("Beispielnetzwerk geladen.")
             st.rerun()
 
 
-# ── RIGHT PANEL: Network canvas ───────────────────────────────────────────
+# ── RIGHT PANEL: agraph canvas ───────────────────────────────────────────────
 with canvas_col:
     st.markdown("### Netzwerk-Ansicht")
 
-    fig = build_plotly_figure(st.session_state.nodes, st.session_state.edges)
-    st.plotly_chart(fig, use_container_width=True, key="network_canvas")
+    if not st.session_state.nodes:
+        st.info(
+            "Noch keine Knoten vorhanden. "
+            "Fügen Sie links Geräte hinzu — sie werden automatisch platziert."
+        )
+    else:
+        ag_nodes, ag_edges = build_agraph(st.session_state.nodes, st.session_state.edges)
+        agraph(nodes=ag_nodes, edges=ag_edges, config=AGRAPH_CONFIG)
 
-    # Summary table
+    # Node summary table
     if st.session_state.nodes:
         st.markdown("#### Knotenübersicht")
+        import pandas as pd
         node_rows = []
         for n in st.session_state.nodes:
-            type_label = NODE_TYPES.get(n.get("type",""), {}).get("label", n.get("type",""))
-            row = {
+            type_label = NODE_TYPES.get(n.get("type", ""), {}).get("label", n.get("type", ""))
+            props = n.get("props", {})
+            model_str = props.get("model", n.get("model", ""))
+            if model_str == "custom":
+                model_str = f"[Benutzerdef.] {props.get('model_name', props.get('manufacturer', ''))}"
+            room_str = props.get("room", n.get("room", ""))
+            node_rows.append({
                 "ID":          n["id"][:8],
                 "Typ":         type_label,
                 "Bezeichnung": n.get("label", ""),
-                "X [m]":       n.get("x", 0),
-                "Y [m]":       n.get("y", 0),
-                "Zusatz":      n.get("room", n.get("model", "")),
-            }
-            node_rows.append(row)
-        import pandas as pd
+                "Modell/Info": model_str,
+                "Raum":        room_str,
+            })
         df_nodes = pd.DataFrame(node_rows)
         st.dataframe(df_nodes, use_container_width=True, hide_index=True)
 
     if st.session_state.edges:
         st.markdown("#### Rohrsegmentübersicht")
-        node_map_label = {n["id"]: n.get("label", n["id"]) for n in st.session_state.nodes}
+        import pandas as pd
+        node_map_lbl = {n["id"]: n.get("label", n["id"]) for n in st.session_state.nodes}
         edge_rows = []
         for e in st.session_state.edges:
-            fit_str = ", ".join(f"{k}:{v}" for k, v in e.get("fittings", {}).items()) or "—"
+            props = e.get("props", {})
+            fit_src = e.get("fittings", props.get("fittings_raw", {}))
+            fit_str = ", ".join(f"{k}:{v}" for k, v in fit_src.items()) if fit_src else "—"
+            dn = props.get("dn_sized")
             edge_rows.append({
                 "ID":          e["id"][:8],
-                "Von":         node_map_label.get(e["source"], e["source"]),
-                "Nach":        node_map_label.get(e["target"], e["target"]),
+                "Von":         node_map_lbl.get(e["source"], e["source"]),
+                "Nach":        node_map_lbl.get(e["target"], e["target"]),
                 "Länge [m]":   e.get("length_m", 0),
                 "Formteile":   fit_str,
+                "DN (berechn.)": f"DN{dn}" if dn else "—",
             })
-        import pandas as pd
         df_edges = pd.DataFrame(edge_rows)
         st.dataframe(df_edges, use_container_width=True, hide_index=True)
 
-    # Quick-navigate
     st.markdown("---")
-    st.markdown("*Netzwerk fertig? Weiter zur Hydraulikberechnung →*")
-    st.page_link("pages/2_📊_Hydraulic_Calculation.py", label="📊 Zur Hydraulikberechnung", icon="📊")
+    st.page_link(
+        "pages/2_📊_Hydraulic_Calculation.py",
+        label="Weiter zur Hydraulikberechnung",
+        icon="📊",
+    )

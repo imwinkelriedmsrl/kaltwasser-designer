@@ -5,16 +5,18 @@ Durchflüsse, Druckverluste, Rohrdimensionierung, Kritischer Pfad.
 
 import streamlit as st
 import plotly.graph_objects as go
-import plotly.express as px
 import pandas as pd
-import numpy as np
 
-from utils.helpers import init_session_state, fmt_kW, fmt_kPa, fmt_ms
+from utils.helpers import init_session_state, check_frosting
 from calculations.hydraulics import NetworkCalculator
 from data.geberit_flowfit import FLOWFIT_PIPE_SPECS, get_fluid_properties
 
 # ---------------------------------------------------------------------------
-st.set_page_config(page_title="Hydraulikberechnung | Kaltwasser Designer", layout="wide", page_icon="📊")
+st.set_page_config(
+    page_title="Hydraulikberechnung | Kaltwasser Designer",
+    layout="wide",
+    page_icon="📊",
+)
 init_session_state(st)
 
 st.markdown("""
@@ -23,8 +25,7 @@ st.markdown("""
     background: #f0f4f8; border: 1px solid #c8d6e8; border-radius: 8px;
     padding: 16px; margin-bottom: 12px;
 }
-.critical-row { background-color: #fff3cd !important; font-weight: bold; }
-.ok-badge { color: #155724; background: #d4edda; padding: 3px 8px; border-radius: 4px; font-weight: 600; }
+.ok-badge  { color: #155724; background: #d4edda; padding: 3px 8px; border-radius: 4px; font-weight: 600; }
 .err-badge { color: #721c24; background: #f8d7da; padding: 3px 8px; border-radius: 4px; font-weight: 600; }
 </style>
 """, unsafe_allow_html=True)
@@ -32,12 +33,10 @@ st.markdown("""
 st.markdown("# 📊 Hydraulikberechnung")
 st.markdown("Automatische Rohrdimensionierung, Druckverlustberechnung und Pumpeneignungsprüfung.")
 
-
-# ---------------------------------------------------------------------------
-# Helper: pipe size colour
-# ---------------------------------------------------------------------------
-DN_COLORS = {16: "#e3f2fd", 20: "#bbdefb", 25: "#90caf9", 32: "#64b5f6",
-             40: "#42a5f5", 50: "#2196f3", 63: "#1976d2", 75: "#0d47a1"}
+DN_COLORS = {
+    16: "#e3f2fd", 20: "#bbdefb", 25: "#90caf9", 32: "#64b5f6",
+    40: "#42a5f5", 50: "#2196f3", 63: "#1976d2", 75: "#0d47a1",
+}
 
 
 def dn_badge(dn: int) -> str:
@@ -46,20 +45,18 @@ def dn_badge(dn: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Run calculation button
-# ---------------------------------------------------------------------------
-nodes = st.session_state.nodes
-edges = st.session_state.edges
-sp    = st.session_state.system_params
+nodes  = st.session_state.nodes
+edges  = st.session_state.edges
+sp     = st.session_state.system_params
 
 if not nodes or not edges:
-    st.warning("⚠️ Das Netzwerk ist leer. Bitte zuerst im **Netzwerk-Editor** Knoten und Verbindungen anlegen.")
-    st.page_link("pages/1_🔧_Network_Editor.py", label="→ Zum Netzwerk-Editor", icon="🔧")
+    st.warning("Das Netzwerk ist leer. Bitte zuerst im Netzwerk-Editor Knoten und Verbindungen anlegen.")
+    st.page_link("pages/1_🔧_Network_Editor.py", label="Zum Netzwerk-Editor", icon="🔧")
     st.stop()
 
 col_btn, col_params = st.columns([1, 2])
 with col_btn:
-    run_calc = st.button("▶️ Berechnung ausführen", type="primary", use_container_width=True)
+    run_calc = st.button("Berechnung ausführen", type="primary", use_container_width=True)
 with col_params:
     glycol_pct = int(sp.get("glycol_pct", 30))
     t_sup = sp.get("t_supply_C", 7.0)
@@ -75,8 +72,19 @@ if run_calc:
         try:
             calc = NetworkCalculator(nodes, edges, sp)
             results = calc.run()
+            # Write back sized DN to edge props
+            for edge in st.session_state.edges:
+                eid = edge["id"]
+                dn = results["pipe_sizes"].get(eid)
+                dp = results["dp_results"].get(eid, {}).get("dp_total_Pa")
+                fl = results["edge_flows"].get(eid)
+                if "props" not in edge:
+                    edge["props"] = {}
+                edge["props"]["dn_sized"] = dn
+                edge["props"]["dp_Pa"] = dp
+                edge["props"]["flow_lh"] = round(fl / 1000.0 * (1000.0 / 5.0), 1) if fl else None
             st.session_state.calc_results = results
-            st.success("✅ Berechnung abgeschlossen.")
+            st.success("Berechnung abgeschlossen.")
         except Exception as e:
             st.error(f"Berechnungsfehler: {e}")
             import traceback
@@ -94,24 +102,24 @@ if not results:
 st.markdown("---")
 st.markdown("## Systemübersicht")
 
-pump   = results["pump_check"]
-load   = results["load_check"]
-vol    = results["water_volume"]
-crit_dp = results["critical_path_dp_Pa"] / 1000.0  # kPa
+pump    = results["pump_check"]
+load    = results["load_check"]
+vol     = results["water_volume"]
+crit_dp = results["critical_path_dp_Pa"] / 1000.0
 
 m1, m2, m3, m4, m5, m6 = st.columns(6)
-m1.metric("Kälteleistung gesamt", f"{load['total_indoor_kW']:.1f} kW",
+m1.metric("Kälteleistung gesamt",      f"{load['total_indoor_kW']:.1f} kW",
           delta=f"{load['chiller_capacity_kW'] - load['total_indoor_kW']:.1f} kW Reserve")
-m2.metric("Kältemaschinen-Kapaz.", f"{load['chiller_capacity_kW']:.1f} kW",
+m2.metric("Kältemaschinen-Kapaz.",     f"{load['chiller_capacity_kW']:.1f} kW",
           delta=f"{load['utilisation_pct']:.0f}% Auslastung")
-m3.metric("Kritischer Druckverlust", f"{crit_dp:.1f} kPa")
-m4.metric("Verfügbare Pumpendruckhöhe", f"{pump['pump_head_kPa']:.1f} kPa",
+m3.metric("Kritischer Druckverlust",   f"{crit_dp:.1f} kPa")
+m4.metric("Verfüg. Pumpendruckhöhe",   f"{pump['pump_head_kPa']:.1f} kPa",
           delta=f"{pump['margin_kPa']:.1f} kPa Marge")
-m5.metric("Systemwasserinhalt", f"{vol['total_volume_L']:.1f} L",
+m5.metric("Systemwasserinhalt",        f"{vol['total_volume_L']:.1f} L",
           delta=f"Min. {vol['min_required_L']:.1f} L")
-m6.metric("Rohrsegmente", len(results["segment_summary"]))
+m6.metric("Rohrsegmente",              len(results["segment_summary"]))
 
-# Status checks
+# System checks
 st.markdown("### Systemprüfungen")
 c1, c2, c3, c4 = st.columns(4)
 
@@ -121,7 +129,7 @@ with c1:
         st.caption(f"{load['total_indoor_kW']:.1f} kW ≤ {load['chiller_capacity_kW']:.1f} kW")
     else:
         st.markdown('<span class="err-badge">✗ Kälteleistung überschritten</span>', unsafe_allow_html=True)
-        st.caption(f"{load['total_indoor_kW']:.1f} kW > {load['chiller_capacity_kW']:.1f} kW ⚠️")
+        st.caption(f"{load['total_indoor_kW']:.1f} kW > {load['chiller_capacity_kW']:.1f} kW")
 
 with c2:
     if pump["adequate"]:
@@ -129,7 +137,7 @@ with c2:
         st.caption(f"{pump['pump_head_kPa']:.1f} kPa ≥ {pump['system_dp_kPa']:.1f} kPa")
     else:
         st.markdown('<span class="err-badge">✗ Pumpe unzureichend</span>', unsafe_allow_html=True)
-        st.caption(f"{pump['pump_head_kPa']:.1f} kPa < {pump['system_dp_kPa']:.1f} kPa ⚠️")
+        st.caption(f"{pump['pump_head_kPa']:.1f} kPa < {pump['system_dp_kPa']:.1f} kPa")
 
 with c3:
     if vol["adequate"]:
@@ -140,8 +148,7 @@ with c3:
         st.caption(f"{vol['total_volume_L']:.1f} L < {vol['min_required_L']:.1f} L")
 
 with c4:
-    from utils.helpers import check_frosting
-    frost = check_frosting(t_sup, sp.get("glycol_type","Ethylenglykol"), glycol_pct)
+    frost = check_frosting(t_sup, sp.get("glycol_type", "Ethylenglykol"), glycol_pct)
     if frost["safe"]:
         st.markdown('<span class="ok-badge">✓ Frostschutz ausreichend</span>', unsafe_allow_html=True)
         st.caption(f"Gefrierpunkt {frost['freeze_point_C']:.1f}°C, +{frost['safety_margin_K']:.1f} K")
@@ -156,49 +163,41 @@ st.markdown("---")
 st.markdown("## Rohrsegment-Ergebnisse")
 
 seg_data = results["segment_summary"]
-df_seg = pd.DataFrame(seg_data)
+df_seg   = pd.DataFrame(seg_data)
 
-# Rename for display
 display_cols = {
-    "edge_id":             "Segment-ID",
-    "from":                "Von",
-    "to":                  "Nach",
-    "flow_kW":             "Last [kW]",
-    "nominal_dn":          "Rohr DN",
-    "length_m":            "Länge [m]",
-    "velocity_m_s":        "Geschw. [m/s]",
-    "dp_pipe_Pa":          "ΔP Rohr [Pa]",
-    "dp_fittings_Pa":      "ΔP Formteile [Pa]",
-    "dp_total_kPa":        "ΔP gesamt [kPa]",
-    "on_critical_path":    "Kritischer Pfad",
+    "edge_id":          "Segment-ID",
+    "from":             "Von",
+    "to":               "Nach",
+    "flow_kW":          "Last [kW]",
+    "nominal_dn":       "Rohr DN",
+    "length_m":         "Länge [m]",
+    "velocity_m_s":     "Geschw. [m/s]",
+    "dp_pipe_Pa":       "ΔP Rohr [Pa]",
+    "dp_fittings_Pa":   "ΔP Formteile [Pa]",
+    "dp_total_kPa":     "ΔP gesamt [kPa]",
+    "on_critical_path": "Krit. Pfad",
 }
 
-df_display = df_seg[[c for c in display_cols.keys() if c in df_seg.columns]].copy()
+df_display = df_seg[[c for c in display_cols if c in df_seg.columns]].copy()
 df_display.rename(columns=display_cols, inplace=True)
 
-if "Last [kW]" in df_display.columns:
-    df_display["Last [kW]"] = df_display["Last [kW]"].map("{:.2f}".format)
-if "Länge [m]" in df_display.columns:
-    df_display["Länge [m]"] = df_display["Länge [m]"].map("{:.1f}".format)
-if "Geschw. [m/s]" in df_display.columns:
-    df_display["Geschw. [m/s]"] = df_display["Geschw. [m/s]"].map("{:.3f}".format)
-if "ΔP Rohr [Pa]" in df_display.columns:
-    df_display["ΔP Rohr [Pa]"] = df_display["ΔP Rohr [Pa]"].map("{:.1f}".format)
-if "ΔP Formteile [Pa]" in df_display.columns:
-    df_display["ΔP Formteile [Pa]"] = df_display["ΔP Formteile [Pa]"].map("{:.1f}".format)
-if "ΔP gesamt [kPa]" in df_display.columns:
-    df_display["ΔP gesamt [kPa]"] = df_display["ΔP gesamt [kPa]"].map("{:.3f}".format)
+for col, fmt in [
+    ("Last [kW]",          "{:.2f}"),
+    ("Länge [m]",          "{:.1f}"),
+    ("Geschw. [m/s]",      "{:.3f}"),
+    ("ΔP Rohr [Pa]",       "{:.1f}"),
+    ("ΔP Formteile [Pa]",  "{:.1f}"),
+    ("ΔP gesamt [kPa]",    "{:.3f}"),
+]:
+    if col in df_display.columns:
+        df_display[col] = df_display[col].map(fmt.format)
 
-st.dataframe(
-    df_display,
-    use_container_width=True,
-    hide_index=True,
-)
+st.dataframe(df_display, use_container_width=True, hide_index=True)
 
-# Critical path highlight note
 crit_edges = results.get("critical_path", [])
 if crit_edges:
-    st.info(f"🔴 Kritischer Pfad: {len(crit_edges)} Segmente — Gesamtdruckverlust: {crit_dp:.2f} kPa")
+    st.info(f"Kritischer Pfad: {len(crit_edges)} Segmente — Gesamtdruckverlust: {crit_dp:.2f} kPa")
 
 # ---------------------------------------------------------------------------
 # Charts
@@ -211,7 +210,7 @@ chart_col1, chart_col2 = st.columns(2)
 with chart_col1:
     st.markdown("### Druckverluste pro Segment [kPa]")
     if seg_data:
-        labels = [f"{s['from'][:8]}→{s['to'][:8]}" for s in seg_data]
+        labels  = [f"{s['from'][:8]}→{s['to'][:8]}" for s in seg_data]
         dp_pipe = [s["dp_pipe_Pa"] / 1000.0 for s in seg_data]
         dp_fit  = [s["dp_fittings_Pa"] / 1000.0 for s in seg_data]
 
@@ -231,12 +230,12 @@ with chart_col1:
 with chart_col2:
     st.markdown("### Rohrdurchmesser-Verteilung")
     if seg_data:
-        dn_counts = {}
+        dn_counts  = {}
         dn_lengths = {}
         for s in seg_data:
             dn = s["nominal_dn"]
             l  = float(str(s.get("length_m", 0)).replace(",", "."))
-            dn_counts[f"DN{dn}"] = dn_counts.get(f"DN{dn}", 0) + 1
+            dn_counts[f"DN{dn}"]  = dn_counts.get(f"DN{dn}", 0) + 1
             dn_lengths[f"DN{dn}"] = dn_lengths.get(f"DN{dn}", 0.0) + l
 
         labels_dn = list(dn_counts.keys())
@@ -246,9 +245,8 @@ with chart_col2:
         fig_dn = go.Figure()
         fig_dn.add_bar(
             x=labels_dn, y=lengths,
-            name="Rohrlänge [m]",
-            marker_color=["#1976d2" if "16" not in k else "#90caf9" for k in labels_dn],
-            text=[f"{l:.1f}m<br>({c}×)" for l, c in zip(lengths, counts)],
+            marker_color=["#90caf9" if "16" in k else "#1976d2" for k in labels_dn],
+            text=[f"{l:.1f}m ({c}×)" for l, c in zip(lengths, counts)],
             textposition="outside",
         )
         fig_dn.update_layout(
@@ -259,16 +257,13 @@ with chart_col2:
         )
         st.plotly_chart(fig_dn, use_container_width=True)
 
-# Velocity chart
 st.markdown("### Fliessgeschwindigkeiten pro Segment [m/s]")
 if seg_data:
-    labels_v = [f"{s['from'][:10]}→{s['to'][:10]}" for s in seg_data]
+    labels_v   = [f"{s['from'][:10]}→{s['to'][:10]}" for s in seg_data]
     velocities = [s["velocity_m_s"] for s in seg_data]
-    colors_v = []
+    colors_v   = []
     for s in seg_data:
         v = s["velocity_m_s"]
-        is_branch = any(n.get("id") == s.get("edge_id") for n in nodes)
-        limit = 1.0 if s.get("on_critical_path") else 1.5
         if v > 1.5:
             colors_v.append("#d32f2f")
         elif v > 1.0:
@@ -277,8 +272,7 @@ if seg_data:
             colors_v.append("#388e3c")
 
     fig_v = go.Figure()
-    fig_v.add_bar(x=labels_v, y=velocities, marker_color=colors_v,
-                  name="Geschwindigkeit")
+    fig_v.add_bar(x=labels_v, y=velocities, marker_color=colors_v)
     fig_v.add_hline(y=1.5, line_dash="dash", line_color="#d32f2f",
                     annotation_text="Max. Hauptleitung 1.5 m/s", annotation_position="top right")
     fig_v.add_hline(y=1.0, line_dash="dash", line_color="#f57c00",
@@ -292,18 +286,17 @@ if seg_data:
     )
     st.plotly_chart(fig_v, use_container_width=True)
 
-
 # ---------------------------------------------------------------------------
-# Fluid properties info
+# Fluid properties
 # ---------------------------------------------------------------------------
 st.markdown("---")
-with st.expander("🔬 Flüssigkeitseigenschaften", expanded=False):
+with st.expander("Flüssigkeitseigenschaften", expanded=False):
     props = get_fluid_properties(glycol_pct)
     col_p1, col_p2, col_p3, col_p4 = st.columns(4)
-    col_p1.metric("Dichte",          f"{props['density_kg_m3']:.1f} kg/m³")
-    col_p2.metric("Viskosität",      f"{props['viscosity_Pa_s']*1000:.3f} mPa·s")
-    col_p3.metric("Wärmekapazität",  f"{props['cp_J_kgK']:.0f} J/(kg·K)")
-    col_p4.metric("Rauigkeit",       f"{props['roughness_mm']:.3f} mm")
+    col_p1.metric("Dichte",         f"{props['density_kg_m3']:.1f} kg/m³")
+    col_p2.metric("Viskosität",     f"{props['viscosity_Pa_s']*1000:.3f} mPa·s")
+    col_p3.metric("Wärmekapazität", f"{props['cp_J_kgK']:.0f} J/(kg·K)")
+    col_p4.metric("Rauigkeit",      f"{props['roughness_mm']:.3f} mm")
     st.caption(
         f"Glykollösung: {sp.get('glycol_type','Ethylenglykol')} {glycol_pct}% — "
         f"VL {props['t_supply_C']}°C / RL {props['t_return_C']}°C"
@@ -313,41 +306,47 @@ with st.expander("🔬 Flüssigkeitseigenschaften", expanded=False):
 # Pump adequacy detail
 # ---------------------------------------------------------------------------
 st.markdown("---")
-with st.expander("🔧 Pumpeneignung — Detail", expanded=True):
+with st.expander("Pumpeneignung — Detail", expanded=True):
     c1, c2, c3 = st.columns(3)
-    c1.metric("Verfügbare Pumpendruckhöhe", f"{pump['pump_head_kPa']:.1f} kPa")
-    c2.metric("Systemdruckverlust (kritischer Pfad)", f"{pump['system_dp_kPa']:.1f} kPa",
+    c1.metric("Verfügbare Pumpendruckhöhe",       f"{pump['pump_head_kPa']:.1f} kPa")
+    c2.metric("Systemdruckverlust (krit. Pfad)",  f"{pump['system_dp_kPa']:.1f} kPa",
               delta=f"Marge: {pump['margin_kPa']:.1f} kPa",
               delta_color="normal" if pump["adequate"] else "inverse")
-    c3.metric("Pumpenauslastung", f"{100 - pump.get('margin_pct', 0):.0f} %")
+    c3.metric("Pumpenauslastung",                 f"{100 - pump.get('margin_pct', 0):.0f} %")
 
     if pump["adequate"]:
         st.success(
-            f"✅ Pumpe ist ausreichend dimensioniert. "
+            f"Pumpe ist ausreichend dimensioniert. "
             f"Marge: {pump['margin_kPa']:.1f} kPa ({pump.get('margin_pct',0):.0f}% der Pumpendruckhöhe)"
         )
     else:
         st.error(
-            f"❌ Pumpendruckhöhe {pump['pump_head_kPa']:.1f} kPa ist kleiner als "
+            f"Pumpendruckhöhe {pump['pump_head_kPa']:.1f} kPa ist kleiner als "
             f"Systemdruckverlust {pump['system_dp_kPa']:.1f} kPa! "
-            f"Zusatzpumpe oder Netzdimensionierung überprüfen."
+            f"Pumpendaten prüfen oder Netz optimieren."
         )
 
-    # Pressure drop waterfall
     if crit_edges and seg_data:
         st.markdown("**Druckverlust-Wasserfall (kritischer Pfad)**")
-        crit_segs = [s for s in seg_data if s["edge_id"] in crit_edges]
-        wf_labels = [f"{s['from'][:8]}→{s['to'][:8]}" for s in crit_segs]
-        wf_labels.append("Gebläsekonvektor")
-        wf_dp = [s["dp_total_kPa"] for s in crit_segs]
-        # Add fan coil dp
+        crit_segs  = [s for s in seg_data if s["edge_id"] in crit_edges]
+        wf_labels  = [f"{s['from'][:8]}→{s['to'][:8]}" for s in crit_segs]
+        wf_dp      = [s["dp_total_kPa"] for s in crit_segs]
+
         from data.component_library import get_fan_coil_dp_kPa
         fc_nodes = [n for n in nodes if n.get("type") == "FAN_COIL"]
         if fc_nodes:
-            fc_dp = get_fan_coil_dp_kPa(fc_nodes[0].get("model","Kampmann_KaCool_W_Size4"))
+            fc_node  = fc_nodes[0]
+            fc_props = fc_node.get("props", {})
+            fc_model = fc_props.get("model", fc_node.get("model", "Kampmann_KaCool_W_Size4"))
+            try:
+                if fc_model == "custom":
+                    fc_dp = float(fc_props.get("dp_kPa", 0.0))
+                else:
+                    fc_dp = get_fan_coil_dp_kPa(fc_model)
+            except Exception:
+                fc_dp = 0.0
+            wf_labels.append("Gebläsekonvektor")
             wf_dp.append(fc_dp)
-        else:
-            wf_dp.append(0.0)
 
         fig_wf = go.Figure(go.Waterfall(
             name="Druckverlust",
@@ -358,8 +357,11 @@ with st.expander("🔧 Pumpeneignung — Detail", expanded=True):
             increasing=dict(marker_color="#1976d2"),
             totals=dict(marker_color="#1a237e"),
         ))
-        fig_wf.add_hline(y=pump["pump_head_kPa"], line_dash="dash", line_color="#2e7d32",
-                         annotation_text=f"Pumpendruckhöhe {pump['pump_head_kPa']:.1f} kPa")
+        fig_wf.add_hline(
+            y=pump["pump_head_kPa"],
+            line_dash="dash", line_color="#2e7d32",
+            annotation_text=f"Pumpendruckhöhe {pump['pump_head_kPa']:.1f} kPa",
+        )
         fig_wf.update_layout(
             yaxis_title="Druckverlust [kPa]",
             height=360,
@@ -369,5 +371,4 @@ with st.expander("🔧 Pumpeneignung — Detail", expanded=True):
         st.plotly_chart(fig_wf, use_container_width=True)
 
 st.markdown("---")
-st.markdown("*Weiter zur Materialliste →*")
-st.page_link("pages/3_📋_Material_List.py", label="📋 Zur Materialliste", icon="📋")
+st.page_link("pages/3_📋_Material_List.py", label="Weiter zur Materialliste", icon="📋")

@@ -30,13 +30,11 @@ init_session_state(st)
 # ---------------------------------------------------------------------------
 st.markdown("""
 <style>
-    /* Main background */
     .main .block-container {
         padding-top: 1.5rem;
         padding-bottom: 2rem;
     }
 
-    /* Sidebar */
     section[data-testid="stSidebar"] {
         background-color: #1a2332;
         color: #e0e6f0;
@@ -54,7 +52,6 @@ st.markdown("""
         color: #7eb8f7 !important;
     }
 
-    /* Metric cards */
     [data-testid="metric-container"] {
         background: #f0f4f8;
         border: 1px solid #d0dde8;
@@ -62,7 +59,6 @@ st.markdown("""
         padding: 12px 16px;
     }
 
-    /* Status badges */
     .badge-ok {
         background: #d4edda; color: #155724;
         border: 1px solid #c3e6cb; border-radius: 4px;
@@ -79,13 +75,11 @@ st.markdown("""
         padding: 4px 10px; font-weight: 600; display: inline-block;
     }
 
-    /* Table headers */
     thead tr th {
         background-color: #1a2332 !important;
         color: white !important;
     }
 
-    /* Header bar */
     .app-header {
         background: linear-gradient(135deg, #1565C0 0%, #0D47A1 100%);
         color: white;
@@ -95,12 +89,6 @@ st.markdown("""
     }
     .app-header h1 { color: white; margin: 0; font-size: 1.8rem; }
     .app-header p  { color: #bbdefb; margin: 4px 0 0 0; font-size: 0.95rem; }
-
-    /* Node type colour dots */
-    .dot-chiller    { color: #1565C0; font-size: 1.2rem; }
-    .dot-fancoil    { color: #2E7D32; font-size: 1.2rem; }
-    .dot-junction   { color: #F57F17; font-size: 1.2rem; }
-    .dot-manifold   { color: #AD1457; font-size: 1.2rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -114,15 +102,9 @@ with st.sidebar:
     st.markdown("### Projektinfo")
     sp = st.session_state.system_params
 
-    sp["project_name"] = st.text_input(
-        "Projektname", value=sp.get("project_name", "Kaltwasserprojekt")
-    )
-    sp["project_number"] = st.text_input(
-        "Projektnummer", value=sp.get("project_number", "")
-    )
-    sp["engineer"] = st.text_input(
-        "Ingenieur", value=sp.get("engineer", "")
-    )
+    sp["project_name"]   = st.text_input("Projektname",   value=sp.get("project_name",   "Kaltwasserprojekt"))
+    sp["project_number"] = st.text_input("Projektnummer", value=sp.get("project_number", ""))
+    sp["engineer"]       = st.text_input("Ingenieur",     value=sp.get("engineer",       ""))
 
     st.markdown("---")
     st.markdown("### Systemparameter")
@@ -131,12 +113,12 @@ with st.sidebar:
     with col1:
         sp["t_supply_C"] = st.number_input(
             "VL-Temp. [°C]", value=float(sp.get("t_supply_C", 7.0)),
-            min_value=2.0, max_value=15.0, step=0.5
+            min_value=2.0, max_value=15.0, step=0.5,
         )
     with col2:
         sp["t_return_C"] = st.number_input(
             "RL-Temp. [°C]", value=float(sp.get("t_return_C", 12.0)),
-            min_value=5.0, max_value=20.0, step=0.5
+            min_value=5.0, max_value=20.0, step=0.5,
         )
 
     sp["delta_t_K"] = sp["t_return_C"] - sp["t_supply_C"]
@@ -153,40 +135,38 @@ with st.sidebar:
         value=int(sp.get("glycol_pct", 30)),
     )
 
-    # Freeze point warning
-    from utils.helpers import get_freeze_point_C, check_frosting
+    from utils.helpers import check_frosting
     frost = check_frosting(sp["t_supply_C"], sp["glycol_type"], sp["glycol_pct"])
     fp = frost["freeze_point_C"]
     if frost["safe"]:
-        st.success(f"Gefrierpunkt: {fp:.1f} °C ✓ (+{frost['safety_margin_K']:.1f} K Sicherheit)")
+        st.success(f"Gefrierpunkt: {fp:.1f} °C  (+{frost['safety_margin_K']:.1f} K Sicherheit)")
     else:
-        st.error(f"⚠️ Gefrierpunkt {fp:.1f} °C — Frostschutz unzureichend!")
+        st.error(f"Gefrierpunkt {fp:.1f} °C — Frostschutz unzureichend!")
 
     st.markdown("---")
     st.markdown("### Auslegungsbedingungen")
     sp["t_ambient_design_C"] = st.number_input(
         "Aussentemp. Auslegung [°C]",
         value=float(sp.get("t_ambient_design_C", 32.0)),
-        min_value=-10.0, max_value=50.0, step=1.0
+        min_value=-10.0, max_value=50.0, step=1.0,
     )
     sp["altitude_m"] = st.number_input(
         "Höhenlage [m ü.M.]",
         value=int(sp.get("altitude_m", 400)),
-        min_value=0, max_value=3000, step=50
+        min_value=0, max_value=3000, step=50,
     )
 
     st.markdown("---")
-    # Network summary
     n_nodes = len(st.session_state.nodes)
     n_edges = len(st.session_state.edges)
-    n_fc = sum(1 for n in st.session_state.nodes if n.get("type") == "FAN_COIL")
-    n_ch = sum(1 for n in st.session_state.nodes if n.get("type") == "CHILLER")
+    n_fc    = sum(1 for n in st.session_state.nodes if n.get("type") == "FAN_COIL")
+    n_ch    = sum(1 for n in st.session_state.nodes if n.get("type") == "CHILLER")
 
     st.markdown("### Netzwerk-Status")
     st.markdown(f"""
-    - **Knoten:** {n_nodes} ({n_ch}× Kältemaschine, {n_fc}× GK)
-    - **Rohrsegmente:** {n_edges}
-    - **Berechnungsstatus:** {'✅ Berechnet' if st.session_state.calc_results else '⏳ Nicht berechnet'}
+- **Knoten:** {n_nodes} ({n_ch}× Kältemaschine, {n_fc}× GK)
+- **Rohrsegmente:** {n_edges}
+- **Berechnungsstatus:** {'Berechnet' if st.session_state.calc_results else 'Nicht berechnet'}
     """)
 
     st.session_state.system_params = sp
@@ -204,48 +184,47 @@ st.markdown("""
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
-    st.page_link("pages/1_🔧_Network_Editor.py", label="**🔧 Netzwerk-Editor**", icon="🔧")
+    st.page_link("pages/1_🔧_Network_Editor.py",         label="**Netzwerk-Editor**",    icon="🔧")
     st.caption("Rohrnetz zeichnen, Geräte konfigurieren")
 
 with col2:
-    st.page_link("pages/2_📊_Hydraulic_Calculation.py", label="**📊 Hydraulikberechnung**", icon="📊")
+    st.page_link("pages/2_📊_Hydraulic_Calculation.py",  label="**Hydraulikberechnung**", icon="📊")
     st.caption("Durchflüsse, Druckverluste, Rohrdimensionierung")
 
 with col3:
-    st.page_link("pages/3_📋_Material_List.py", label="**📋 Materialliste**", icon="📋")
+    st.page_link("pages/3_📋_Material_List.py",          label="**Materialliste**",       icon="📋")
     st.caption("Stückliste (BOM), Excel-Export")
 
 with col4:
-    st.page_link("pages/4_📈_Technical_Report.py", label="**📈 Technischer Bericht**", icon="📈")
+    st.page_link("pages/4_📈_Technical_Report.py",       label="**Technischer Bericht**", icon="📈")
     st.caption("Systemzusammenfassung, Ausdruck")
 
 st.markdown("---")
 
-# Quick start section
 st.markdown("## Schnellstart")
 
 c1, c2 = st.columns([2, 1])
 with c1:
     st.markdown("""
-    ### Arbeitsschritte
+### Arbeitsschritte
 
-    1. **Netzwerk-Editor** öffnen und Geräte (Kältemaschine + Gebläsekonvektoren) hinzufügen
-    2. Geräte mit Rohrsegmenten verbinden (Längen und Formteile eingeben)
-    3. **Hydraulikberechnung** ausführen — automatische Rohrdimensionierung mit Geberit FlowFit
-    4. **Materialliste** prüfen und als Excel exportieren
-    5. **Technischen Bericht** für die Dokumentation generieren
+1. **Netzwerk-Editor** öffnen — Kältemaschine und Gebläsekonvektoren hinzufügen
+2. Geräte mit Rohrsegmenten verbinden (Längen und Formteile eingeben)
+3. **Hydraulikberechnung** ausführen — automatische Rohrdimensionierung
+4. **Materialliste** prüfen und als Excel exportieren
+5. **Technischen Bericht** für die Dokumentation generieren
 
-    ### Systemauslegung
+### Systemauslegung
 
-    | Parameter | Wert |
-    |-----------|------|
-    | Vorlauftemperatur | 7 °C |
-    | Rücklauftemperatur | 12 °C |
-    | Temperaturdifferenz | 5 K |
-    | Rohrsystem | Geberit FlowFit (Ø16–Ø75) |
-    | Max. Geschwindigkeit (Hauptleitung) | 1.5 m/s |
-    | Max. Geschwindigkeit (Stichleitung) | 1.0 m/s |
-    | Max. spez. Druckverlust | 150 Pa/m (1.5 mbar/m) |
+| Parameter | Wert |
+|-----------|------|
+| Vorlauftemperatur | 7 °C |
+| Rücklauftemperatur | 12 °C |
+| Temperaturdifferenz | 5 K |
+| Rohrsystem | Geberit FlowFit (Ø16–Ø75) |
+| Max. Geschwindigkeit (Hauptleitung) | 1.5 m/s |
+| Max. Geschwindigkeit (Stichleitung) | 1.0 m/s |
+| Max. spez. Druckverlust | 150 Pa/m |
     """)
 
 with c2:
@@ -253,35 +232,37 @@ with c2:
 
     st.markdown("**Aussengeräte (Kältemaschinen)**")
     st.info("""
-    **Climaveneta i-BX2-G07 27Y**
-    - Kälteleistung: 27.2 kW
-    - EER: 3.22
-    - Kältemittel: R32
-    - Pumpendruckhöhe: 96.8 kPa
+**Climaveneta i-BX2-G07 27Y**
+- Kälteleistung: 27.2 kW
+- EER: 3.22
+- Kältemittel: R32
+- Pumpe integriert: 96.8 kPa
     """)
 
     st.markdown("**Innengeräte (Gebläsekonvektoren)**")
     st.success("""
-    **Kampmann KaCool W Gr. 4**
-    - Kühlleistung: bis 4040 W (10V)
-    - Wasserfluss: 696 l/h
-    - Druckverlust: 67.6 kPa
+**Kampmann KaCool W — 4 Grössen**
+- Gr. 1: 1690 W / 291 l/h / 15.2 kPa
+- Gr. 2: 2290 W / 395 l/h / 27.0 kPa
+- Gr. 3: 3160 W / 545 l/h / 47.5 kPa
+- Gr. 4: 4040 W / 696 l/h / 67.6 kPa
+- Anschluss ½", Steuerung 0–10V
     """)
 
     st.markdown("**Rohrleitungssystem**")
     st.warning("""
-    **Geberit FlowFit**
-    - Ø16 bis Ø75 mm
-    - 30% / 40% Ethylenglykol
-    - Tabellen nach Herstellerdaten
+**Geberit FlowFit**
+- Ø16 bis Ø75 mm
+- 30% / 40% Ethylenglykol
+- Tabellen nach Herstellerdaten
     """)
 
 st.markdown("---")
 st.markdown("""
 <small style="color: #888;">
-Kaltwasser Designer v1.0 — Werkzeug für HLK-Ingenieure |
+Kaltwasser Designer v2.0 — Werkzeug für HLK-Ingenieure |
 Rohrdruckverlust-Daten: Geberit FlowFit |
 Kältemaschine: Climaveneta i-BX2-G07 27Y |
-Gebläsekonvektor: Kampmann KaCool W Gr. 4
+Gebläsekonvektoren: Kampmann KaCool W Gr. 1–4
 </small>
 """, unsafe_allow_html=True)

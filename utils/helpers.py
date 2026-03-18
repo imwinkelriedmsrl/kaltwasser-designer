@@ -16,18 +16,18 @@ import numpy as np
 # ---------------------------------------------------------------------------
 
 DEFAULT_SYSTEM_PARAMS = {
-    "project_name":     "Kaltwasserprojekt",
-    "project_number":   "",
-    "engineer":         "",
-    "t_supply_C":       7.0,
-    "t_return_C":       12.0,
-    "delta_t_K":        5.0,
-    "glycol_type":      "Ethylenglykol",
-    "glycol_pct":       30,
+    "project_name":       "Kaltwasserprojekt",
+    "project_number":     "",
+    "engineer":           "",
+    "t_supply_C":         7.0,
+    "t_return_C":         12.0,
+    "delta_t_K":          5.0,
+    "glycol_type":        "Ethylenglykol",
+    "glycol_pct":         30,
     "t_ambient_design_C": 32.0,
-    "altitude_m":       400,
-    "t_indoor_design_C": 27.0,
-    "rh_indoor_pct":    50,
+    "altitude_m":         400,
+    "t_indoor_design_C":  27.0,
+    "rh_indoor_pct":      50,
 }
 
 DEFAULT_NODES: List[Dict] = []
@@ -49,6 +49,10 @@ def init_session_state(st) -> None:
         st.session_state.calc_results = None
     if "selected_node" not in st.session_state:
         st.session_state.selected_node = None
+    if "custom_chillers" not in st.session_state:
+        st.session_state.custom_chillers = []
+    if "custom_fan_coils" not in st.session_state:
+        st.session_state.custom_fan_coils = []
 
 
 def make_node_id() -> str:
@@ -149,26 +153,18 @@ def size_expansion_vessel(
         vn_L    – nominal vessel volume [L]
         p0_bar  – pre-charge pressure [bar]
     """
-    # Expansion coefficient for water/glycol mixture (approx)
-    # For 30% EG: coefficient ≈ 0.0036 per K (interpolated)
     e_coeff = 0.0030 + glycol_pct * 0.000020
-    delta_t = 80.0 - t_fill_C  # max temperature range (system including heating side)
+    delta_t = 80.0 - t_fill_C
 
-    # Volume expansion
     ve = total_volume_L * e_coeff * delta_t
-
-    # Pre-charge pressure (= static head + safety margin)
     p0 = p_static_bar + 0.3
-
-    # Vessel sizing factor
     d_factor = (p_max_bar + 1.0) / (p_max_bar - p0)
-
     vn = ve * d_factor * 1.1  # 10% safety margin
 
     return {
-        "ve_L":   round(ve, 1),
-        "vn_L":   round(vn, 1),
-        "p0_bar": round(p0, 2),
+        "ve_L":      round(ve, 1),
+        "vn_L":      round(vn, 1),
+        "p0_bar":    round(p0, 2),
         "p_max_bar": p_max_bar,
     }
 
@@ -180,7 +176,7 @@ def size_expansion_vessel(
 def sound_pressure_at_distance(
     sound_power_dBa: float,
     distance_m: float,
-    directivity_Q: float = 2.0,  # half-space (wall-mounted)
+    directivity_Q: float = 2.0,
 ) -> float:
     """
     Approximate sound pressure level at a given distance.
@@ -202,7 +198,7 @@ FREEZE_POINTS_EG = {
     10: -3.5,
     20: -8.5,
     25: -11.0,
-    30: -14.0,  # Climaveneta requirement
+    30: -14.0,
     35: -17.5,
     40: -22.0,
     50: -34.0,
@@ -224,7 +220,6 @@ def get_freeze_point_C(glycol_type: str, glycol_pct: int) -> float:
     """Return freeze point in °C for a glycol mixture."""
     table = FREEZE_POINTS_EG if "ethylen" in glycol_type.lower() else FREEZE_POINTS_PG
     pcts = sorted(table.keys())
-    # linear interpolation
     for i in range(len(pcts) - 1):
         if pcts[i] <= glycol_pct <= pcts[i + 1]:
             p0, p1 = pcts[i], pcts[i + 1]
@@ -240,10 +235,10 @@ def check_frosting(t_supply_C: float, glycol_type: str, glycol_pct: int) -> Dict
     fp = get_freeze_point_C(glycol_type, glycol_pct)
     safety_margin = t_supply_C - fp
     return {
-        "freeze_point_C": fp,
-        "supply_C":       t_supply_C,
-        "safety_margin_K": safety_margin,
-        "safe":           safety_margin >= 3.0,  # min 3K safety margin
+        "freeze_point_C":   fp,
+        "supply_C":         t_supply_C,
+        "safety_margin_K":  safety_margin,
+        "safe":             safety_margin >= 3.0,
     }
 
 
