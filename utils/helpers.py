@@ -5,6 +5,7 @@ General helper utilities for Kaltwasser Designer.
 import json
 import uuid
 import io
+import datetime
 from typing import Dict, List, Any, Optional
 
 import pandas as pd
@@ -63,6 +64,8 @@ def init_session_state(st) -> None:
         st.session_state.custom_fan_coils = []
     if "node_positions" not in st.session_state:
         st.session_state.node_positions = {}
+    if "lx_device_ips" not in st.session_state:
+        st.session_state.lx_device_ips = {}
 
 
 def make_node_id() -> str:
@@ -107,6 +110,54 @@ def library_from_json(json_str: str):
     """Deserialise custom device libraries. Returns (custom_chillers, custom_fan_coils)."""
     data = json.loads(json_str)
     return data.get("custom_chillers", []), data.get("custom_fan_coils", [])
+
+
+def project_to_json(st) -> str:
+    """Serialise the complete project (network + library + Loxone config) to JSON."""
+    data = {
+        "version": "1.1",
+        "saved_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "nodes": st.session_state.get("nodes", []),
+        "edges": st.session_state.get("edges", []),
+        "system_params": st.session_state.get("system_params", {}),
+        "custom_chillers": st.session_state.get("custom_chillers", []),
+        "custom_fan_coils": st.session_state.get("custom_fan_coils", []),
+        "node_positions": st.session_state.get("node_positions", {}),
+        "loxone": {
+            "miniserver": st.session_state.get("lx_miniserver", "Miniserver"),
+            "controls": st.session_state.get("lx_controls", {}),
+            "extensions": st.session_state.get("lx_extensions", {}),
+            "modbus_rtu_outdoor": st.session_state.get("lx_modbus_rtu_outdoor", True),
+            "modbus_tcp_fc": st.session_state.get("lx_modbus_tcp_fc", True),
+            "fc_ip_start": st.session_state.get("lx_fc_ip_start", "192.168.1.100"),
+            "lamelle_ip_start": st.session_state.get("lx_lamelle_ip_start", "192.168.1.150"),
+            "lamelle_enabled": st.session_state.get("lx_lamelle_enabled", True),
+            "device_ips": st.session_state.get("lx_device_ips", {}),
+        },
+    }
+    return json.dumps(data, indent=2, ensure_ascii=False)
+
+
+def project_from_json(json_str: str, st) -> None:
+    """Restore complete project state from a JSON string."""
+    data = json.loads(json_str)
+    st.session_state.nodes = data.get("nodes", [])
+    st.session_state.edges = data.get("edges", [])
+    st.session_state.system_params = {**DEFAULT_SYSTEM_PARAMS, **data.get("system_params", {})}
+    st.session_state.custom_chillers = data.get("custom_chillers", [])
+    st.session_state.custom_fan_coils = data.get("custom_fan_coils", [])
+    st.session_state.node_positions = data.get("node_positions", {})
+    st.session_state.calc_results = None
+    lx = data.get("loxone", {})
+    st.session_state.lx_miniserver = lx.get("miniserver", "Miniserver")
+    st.session_state.lx_controls = lx.get("controls", {})
+    st.session_state.lx_extensions = lx.get("extensions", {})
+    st.session_state.lx_modbus_rtu_outdoor = lx.get("modbus_rtu_outdoor", True)
+    st.session_state.lx_modbus_tcp_fc = lx.get("modbus_tcp_fc", True)
+    st.session_state.lx_fc_ip_start = lx.get("fc_ip_start", "192.168.1.100")
+    st.session_state.lx_lamelle_ip_start = lx.get("lamelle_ip_start", "192.168.1.150")
+    st.session_state.lx_lamelle_enabled = lx.get("lamelle_enabled", True)
+    st.session_state.lx_device_ips = lx.get("device_ips", {})
 
 
 # ---------------------------------------------------------------------------

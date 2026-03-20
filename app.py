@@ -8,7 +8,7 @@ Run with:
 """
 
 import streamlit as st
-from utils.helpers import init_session_state, DEFAULT_SYSTEM_PARAMS
+from utils.helpers import init_session_state, DEFAULT_SYSTEM_PARAMS, project_to_json, project_from_json
 
 # ---------------------------------------------------------------------------
 # Page configuration (must be first Streamlit call)
@@ -24,6 +24,14 @@ st.set_page_config(
 # Initialise session state
 # ---------------------------------------------------------------------------
 init_session_state(st)
+
+# ---------------------------------------------------------------------------
+# Logo (sidebar top)
+# ---------------------------------------------------------------------------
+import os
+_logo_path = os.path.join(os.path.dirname(__file__), "static", "imwinkelried_logo.png")
+if os.path.exists(_logo_path):
+    st.logo(_logo_path, size="large", link="https://www.imwinkelried.ch")
 
 # ---------------------------------------------------------------------------
 # Custom CSS — engineering style
@@ -188,22 +196,43 @@ with st.sidebar:
 
     st.session_state.system_params = sp
 
+    # -----------------------------------------------------------------------
+    # Projekt Speichern / Öffnen
+    # -----------------------------------------------------------------------
+    st.markdown("---")
+    st.markdown("### 💾 Projekt")
+
+    proj_name = sp.get("project_name", "Kaltwasserprojekt").replace(" ", "_")
+    proj_json = project_to_json(st)
+    st.download_button(
+        label="📥 Projekt speichern (.json)",
+        data=proj_json.encode("utf-8"),
+        file_name=f"{proj_name}.json",
+        mime="application/json",
+        use_container_width=True,
+    )
+
+    uploaded = st.file_uploader(
+        "📂 Projekt öffnen",
+        type=["json"],
+        key="proj_upload",
+        label_visibility="collapsed",
+        help="Kaltwasser Designer Projektdatei (.json) laden",
+    )
+    if uploaded is not None:
+        try:
+            project_from_json(uploaded.read().decode("utf-8"), st)
+            st.success("Projekt geladen — Seite wird neu geladen …")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Fehler beim Laden: {e}")
+
     # Imwinkelried logo and link at the bottom of sidebar
     st.markdown("---")
     st.markdown(
-        '<div style="text-align:center; padding:10px;">'
-        '<a href="https://www.imwinkelried.ch" target="_blank">'
-        '<img src="https://www.imwinkelried.ch/typo3conf/ext/iwl_base/Resources/Public/Images/logo.svg" '
-        'style="max-width:160px;" alt="Imwinkelried Lüftung und Klima"/>'
-        '</a><br>'
-        '<small><a href="https://www.imwinkelried.ch" target="_blank">imwinkelried.ch</a></small>'
+        '<div style="text-align:center; padding:6px;">'
+        '<small><a href="https://www.imwinkelried.ch" target="_blank" style="color:#7eb8f7;">imwinkelried.ch</a></small>'
         '</div>',
-        unsafe_allow_html=True
-    )
-    st.markdown(
-        '<div style="text-align:center;">'
-        '<a href="https://www.imwinkelried.ch" target="_blank" style="font-weight:bold; font-size:14px;">'
-        '🌡️ Imwinkelried Lüftung + Klima AG</a></div>',
         unsafe_allow_html=True
     )
 

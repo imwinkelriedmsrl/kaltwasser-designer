@@ -20,6 +20,11 @@ st.set_page_config(
 )
 init_session_state(st)
 
+import os as _os
+_logo_p = _os.path.join(_os.path.dirname(__file__), "..", "static", "imwinkelried_logo.png")
+if _os.path.exists(_logo_p):
+    st.logo(_logo_p, size="large", link="https://www.imwinkelried.ch")
+
 st.markdown("""
 <style>
 .lib-header {

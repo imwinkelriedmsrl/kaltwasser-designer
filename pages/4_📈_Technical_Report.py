@@ -9,6 +9,8 @@ import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
 import numpy as np
+import base64
+import os
 from datetime import datetime
 
 from utils.helpers import (
@@ -30,6 +32,10 @@ st.set_page_config(
     page_icon="📈",
 )
 init_session_state(st)
+
+_logo_sidebar = os.path.join(os.path.dirname(__file__), "..", "static", "imwinkelried_logo.png")
+if os.path.exists(_logo_sidebar):
+    st.logo(_logo_sidebar, size="large", link="https://www.imwinkelried.ch")
 
 st.markdown("""
 <style>
@@ -125,15 +131,31 @@ for n in fan_coil_nodes:
 # ---------------------------------------------------------------------------
 now = datetime.now()
 
+# Embed logo as base64 for report (works offline and in print)
+_logo_path = os.path.join(os.path.dirname(__file__), "..", "static", "imwinkelried_logo.png")
+_logo_html = ""
+if os.path.exists(_logo_path):
+    _logo_b64 = base64.b64encode(open(_logo_path, "rb").read()).decode()
+    _logo_html = (
+        f'<img src="data:image/png;base64,{_logo_b64}" '
+        f'style="height:48px;" alt="Imwinkelried"/>'
+    )
+
 st.markdown(f"""
-<div class="report-header">
-  <h1>Technischer Bericht</h1>
-  <p>
-    <strong>{project_name}</strong> &nbsp;|&nbsp;
-    Projektnummer: {project_num} &nbsp;|&nbsp;
-    Ingenieur: {engineer} &nbsp;|&nbsp;
-    Datum: {now.strftime('%d.%m.%Y')}
-  </p>
+<div class="report-header" style="display:flex; align-items:center; justify-content:space-between;">
+  <div>
+    <h1>Technischer Bericht</h1>
+    <p>
+      <strong>{project_name}</strong> &nbsp;|&nbsp;
+      Projektnummer: {project_num} &nbsp;|&nbsp;
+      Ingenieur: {engineer} &nbsp;|&nbsp;
+      Datum: {now.strftime('%d.%m.%Y')}
+    </p>
+  </div>
+  <div style="text-align:right; min-width:180px;">
+    {_logo_html}
+    <div style="color:#bbdefb; font-size:0.8rem; margin-top:4px;">Lüftung und Klima</div>
+  </div>
 </div>
 """, unsafe_allow_html=True)
 
